@@ -80,16 +80,21 @@ class TransactionGenerator:
 
     def generate_day(self, store: int, business_date: date) -> list[RtlogRecord]:
         """All transactions for one store on one business day."""
+        registry = self.cfg.stores()
+        store_rec = registry.get(store)
+        n_tills = store_rec.tills if store_rec else self.cfg.tills_per_store
+        currency = store_rec.local_currency if store_rec else self.cfg.currency
+
         records: list[RtlogRecord] = []
         multiplier = _day_multiplier(business_date)
         target = max(1, int(
-            self.cfg.avg_trans_per_till_per_day * self.cfg.tills_per_store * multiplier
+            self.cfg.avg_trans_per_till_per_day * n_tills * multiplier
         ))
 
         tran_no_counter: dict[str, int] = {}  # register → next tran_no
 
         # OPEN transactions — one per till at store open (hour 6)
-        for till_idx in range(1, self.cfg.tills_per_store + 1):
+        for till_idx in range(1, n_tills + 1):
             register = f"TILL{till_idx:02d}"
             records.append(self._build_open_close(store, business_date, register, "OPEN", 6))
             tran_no_counter[register] = 1
@@ -101,17 +106,17 @@ class TransactionGenerator:
                 weights=[85, 7, 3, 1, 1, 2],
                 k=1,
             )[0]
-            register = f"TILL{self.rng.randint(1, self.cfg.tills_per_store):02d}"
+            register = f"TILL{self.rng.randint(1, n_tills):02d}"
             tran_no = tran_no_counter[register]
             tran_no_counter[register] += 1
             hour = _weighted_hour(self.rng)
             record = self._build_transaction(
-                store, business_date, register, tran_no, tran_type, hour
+                store, business_date, register, tran_no, tran_type, hour, currency
             )
             records.append(record)
 
         # CLOSE transactions — one per till at store close (hour 22)
-        for till_idx in range(1, self.cfg.tills_per_store + 1):
+        for till_idx in range(1, n_tills + 1):
             register = f"TILL{till_idx:02d}"
             records.append(self._build_open_close(store, business_date, register, "CLOSE", 22))
 
@@ -171,6 +176,7 @@ class TransactionGenerator:
         tran_no: int,
         tran_type: str,
         hour: int,
+        currency: str,
     ) -> RtlogRecord:
         ts = self._now_str(d, hour)
         cashier = self.rng.choice(CASHIER_IDS)
@@ -190,7 +196,7 @@ class TransactionGenerator:
             return RtlogRecord(rtlog_orig_sys="POS", tran_head=head)
 
         if tran_type in ("PAIDIN", "PAIDOUT"):
-            return self._build_paidinout(store, d, register, tran_no, tran_type, ts, cashier, sp)
+            return self._build_paidinout(store, d, register, tran_no, tran_type, ts, cashier, sp, currency)
 
         # SALE / RETURN / PVOID
         items, discs, igtax_rows, tax_rows = self._build_items(tran_type, d, hour)
@@ -204,7 +210,7 @@ class TransactionGenerator:
         if value < 0:
             value = _D("0.0000")
 
-        tenders = self._build_tenders(value)
+        tenders = self._build_tenders(value, currency)
 
         # Loyalty REF_NO1 — 30% of SALE transactions
         ref_no1 = None
@@ -243,7 +249,7 @@ class TransactionGenerator:
 
     def _build_paidinout(
         self, store: int, d: date, register: str, tran_no: int,
-        tran_type: str, ts: str, cashier: str, sp: str,
+        tran_type: str, ts: str, cashier: str, sp: str, currency: str,
     ) -> RtlogRecord:
         amount = _D(str(round(self.rng.uniform(500, 5000), 2)))
         amount = amount.quantize(_D("0.0001"), rounding=ROUND_HALF_UP)
@@ -253,7 +259,7 @@ class TransactionGenerator:
             tender_type_id=1,
             tender_amt=_round4(amount),
             error_ind="N",
-            orig_currency=self.cfg.currency,
+            orig_currency=currency,
             orig_curr_amt=_round4(amount),
         )
         head = TranHead(
@@ -366,7 +372,7 @@ class TransactionGenerator:
 
         return items, discs, igtax_rows, tax_rows
 
-    def _build_tenders(self, value: Decimal) -> list[TranTender]:
+    def _build_tenders(self, value: Decimal, currency: str) -> list[TranTender]:
         if value <= 0:
             return []
 
@@ -385,7 +391,7 @@ class TransactionGenerator:
                 if tender_type["tender_type_group"] == "CARD" else None,
             cc_entry_mode=self.rng.choice(["CHIP", "CONTACTLESS", "SWIPE"])
                 if tender_type["tender_type_group"] == "CARD" else None,
-            orig_currency=self.cfg.currency,
+            orig_currency=currency,
             orig_curr_amt=_round4(value),
         )]
         return tenders

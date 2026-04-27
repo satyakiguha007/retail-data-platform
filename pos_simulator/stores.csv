@@ -1,0 +1,27 @@
+store_no,store_name,tills,country,local_currency,exchange_rate_to_usd
+33487,South City Mall,20,India,INR,84.50
+39876,Phoenix Mall Mumbai,15,India,INR,84.50
+41203,Select Citywalk Delhi,18,India,INR,84.50
+44512,Forum Mall Bangalore,12,India,INR,84.50
+47889,Express Avenue Chennai,14,India,INR,84.50
+51234,Inorbit Mall Hyderabad,16,India,INR,84.50
+53901,Lulu Mall Kochi,22,India,INR,84.50
+56123,VR Mall Bengaluru,10,India,INR,84.50
+58745,Nexus Ahmedabad,13,India,INR,84.50
+62003,Ambience Mall Delhi,18,India,INR,84.50
+64301,Elante Mall Chandigarh,11,India,INR,84.50
+66782,Palladium Mumbai,24,India,INR,84.50
+70001,Westfield Century City,25,USA,USD,1.00
+70002,Mall of America,30,USA,USD,1.00
+70003,Galleria Dallas,20,USA,USD,1.00
+70004,Tysons Corner Center,22,USA,USD,1.00
+70005,King of Prussia,28,USA,USD,1.00
+80001,Westfield Stratford,18,UK,GBP,0.79
+80002,Bluewater Shopping Centre,16,UK,GBP,0.79
+80003,Trafford Centre,14,UK,GBP,0.79
+80004,Meadowhall Sheffield,12,UK,GBP,0.79
+90001,Dubai Mall,35,UAE,AED,3.67
+90002,Mall of the Emirates,30,UAE,AED,3.67
+90003,Yas Mall Abu Dhabi,20,UAE,AED,3.67
+95001,Ion Orchard,15,Singapore,SGD,1.35
+95002,VivoCity,18,Singapore,SGD,1.35
