@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(py -3 -m pytest tests/pos_simulator/ -q)"
+      "Bash(py -3 -m pytest tests/pos_simulator/ -q)",
+      "Bash(py -3 ingestion/fx_rates/run_fx_rates.py --mode synthetic --out output/test_fx.csv)"
     ]
   }
 }

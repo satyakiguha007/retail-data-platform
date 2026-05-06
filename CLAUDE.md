@@ -37,14 +37,14 @@ QA experience as a portfolio differentiator.
 ## Module structure and status
 | # | Module | Folder | Status |
 |---|---|---|---|
-| 1 | POS RTLOG Simulator | `pos_simulator/` | Not started |
-| 2 | Batch Sources & Additional Channels | `ingestion/` | Not started |
+| 1 | POS RTLOG Simulator | `pos_simulator/` | **Complete** |
+| 2 | Batch Sources & Additional Channels | `ingestion/` | **Complete** |
 | 3 | Medallion Lakehouse (Bronze → Silver ReSA → Gold) | `transformations/` | Not started |
 | 4 | Sales Audit Layer (18 rules → SA_ERROR) | `audit/` | Not started |
 | 5 | LLM Intelligence Layer | `llm/` | Not started |
 | 6 | Serving & Visualization (Power BI) | `serving/` | Not started |
 
-Repo scaffolding is complete; no source code exists yet. Module 1 is next.
+Module 1 complete. Module 2 is next.
 
 ## Out of scope for v1
 - Training custom ML models (we use pre-trained LLMs only)

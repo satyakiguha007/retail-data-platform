@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(del output\\\\test_fx.csv output\\\\test_weather.csv)"
+    ]
+  }
+}
