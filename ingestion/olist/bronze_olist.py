@@ -18,7 +18,7 @@
 
 # COMMAND ----------
 
-dbutils.widgets.text("landing_root", "abfss://landing@<storage>.dfs.core.windows.net", "Landing zone root")
+dbutils.widgets.text("landing_root", "abfss://landing@<storage>.dfs.core.windows.net", "Landing zone root (local dev: use absolute path to data/landing)")
 dbutils.widgets.text("catalog",      "retail",  "Unity Catalog name")
 dbutils.widgets.text("bronze_schema","bronze",  "Bronze schema name")
 
@@ -130,13 +130,27 @@ SCHEMAS: dict[str, StructType] = {
 
 # COMMAND ----------
 
+# Map our clean Delta table names → actual Kaggle CSV filenames.
+# Kaggle uses _dataset suffix on most files; the translation table is the exception.
+_KAGGLE_FILENAMES = {
+    "olist_orders":                            "olist_orders_dataset.csv",
+    "olist_order_items":                       "olist_order_items_dataset.csv",
+    "olist_order_payments":                    "olist_order_payments_dataset.csv",
+    "olist_order_reviews":                     "olist_order_reviews_dataset.csv",
+    "olist_customers":                         "olist_customers_dataset.csv",
+    "olist_sellers":                           "olist_sellers_dataset.csv",
+    "olist_products":                          "olist_products_dataset.csv",
+    "olist_product_category_name_translation": "product_category_name_translation.csv",
+    "olist_geolocation":                       "olist_geolocation_dataset.csv",
+}
+
 from datetime import datetime
 ingested_at = datetime.utcnow()
 
 table_stats = []
 
 for table_name, schema in SCHEMAS.items():
-    csv_file = f"{olist_path}/{table_name}.csv"
+    csv_file = f"{olist_path}/{_KAGGLE_FILENAMES[table_name]}"
     target = tbl(table_name)
 
     # Read with enforced schema
