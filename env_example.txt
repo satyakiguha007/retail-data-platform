@@ -1,0 +1,6 @@
+# .env.example  --  template, safe to commit
+AZURE_TENANT_ID=your-tenant-uuid
+AZURE_CLIENT_ID=your-sp-app-id
+AZURE_CLIENT_SECRET=your-sp-password
+AZURE_STORAGE_ACCOUNT=stretaildpsatyaki01
+AZURE_STORAGE_CONTAINER_RAW=raw

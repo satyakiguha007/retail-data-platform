@@ -1,0 +1,7 @@
+streamlit>=1.32.0
+azure-identity>=1.15.0
+azure-storage-file-datalake>=12.14.0
+python-dotenv>=1.0.0
+apscheduler>=3.10.0
+pandas>=2.0.0
+plotly>=5.18.0

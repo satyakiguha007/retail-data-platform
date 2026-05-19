@@ -1,0 +1,52 @@
+[
+  {
+    "timestamp": "2026-05-19T12:23:45.321450",
+    "source_id": "olist",
+    "source_name": "Olist E-commerce",
+    "trigger": "adhoc",
+    "total": 10,
+    "uploaded": 10,
+    "failed": 0,
+    "elapsed_seconds": 97.03158521652222
+  },
+  {
+    "timestamp": "2026-05-19T12:22:08.276663",
+    "source_id": "weather",
+    "source_name": "Weather Data",
+    "trigger": "adhoc",
+    "total": 1,
+    "uploaded": 1,
+    "failed": 0,
+    "elapsed_seconds": 3.217578649520874
+  },
+  {
+    "timestamp": "2026-05-19T12:22:05.043441",
+    "source_id": "fx_rates",
+    "source_name": "FX Rates",
+    "trigger": "adhoc",
+    "total": 1,
+    "uploaded": 1,
+    "failed": 0,
+    "elapsed_seconds": 0.9119837284088135
+  },
+  {
+    "timestamp": "2026-05-19T12:22:04.115870",
+    "source_id": "marketplace",
+    "source_name": "Marketplace Feeds",
+    "trigger": "adhoc",
+    "total": 637,
+    "uploaded": 637,
+    "failed": 0,
+    "elapsed_seconds": 42.288045167922974
+  },
+  {
+    "timestamp": "2026-05-19T12:21:21.235083",
+    "source_id": "pos_rtlog",
+    "source_name": "POS RTLOGs",
+    "trigger": "adhoc",
+    "total": 390,
+    "uploaded": 390,
+    "failed": 0,
+    "elapsed_seconds": 29.75952386856079
+  }
+]
