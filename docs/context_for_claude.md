@@ -1,50 +1,86 @@
 # Current project state
 
-Last updated: 2026-05-06
+Last updated: 2026-05-20
 
 ## Done
-- Repo scaffolded, CLAUDE.md with full conventions
 
-- **Module 1 COMPLETE: POS RTLOG Simulator** (`pos_simulator/`)
-  - 26 stores across India/USA/UK/UAE/Singapore (stores.csv)
-  - All 8 TRAN_TYPEs, 6 fault types, IGTAX/TAX/BOTH modes
-  - NDJSON partitioned store=/date=/hour= (Auto Loader ready)
-  - CLI, Dockerfile, 41 passing tests, full docs
+### Module 1 — POS RTLOG Simulator (`pos_simulator/`)
+- 26 stores across India/USA/UK/UAE/Singapore (stores.csv)
+- All 8 TRAN_TYPEs, 6 fault types, IGTAX/TAX/BOTH modes
+- NDJSON partitioned `store=/date=/hour=` (Auto Loader ready)
+- CLI, Dockerfile, 41 passing tests, full docs
 
-- **Module 2 COMPLETE: Batch Sources & Additional Channels** (`ingestion/`)
-  - **FX rates** (`ingestion/fx_rates/`):
-    - `generate_fx_rates.py` — synthetic GBM random walk, 5 currencies, 2023-2024
-    - `fetch_fx_rates.py` — real ECB rates via Frankfurter API (free, no key)
-    - `run_fx_rates.py` — interactive orchestrator: popup → fetch or generate → CSV
-    - `bronze_fx_rates.py` — Databricks notebook, MERGE on (date × currency)
-    - `sample_data/fx_rates_2023_2024.csv` — 3,655 rows fixture
-  - **Marketplace simulator** (`ingestion/marketplace/`):
-    - Full package: config, models, reference_data, generator, writer, main
-    - 7 marketplaces (AMAZON_IN, FLIPKART_IN, MYNTRA_IN, AMAZON_US, AMAZON_UK, AMAZON_AE, LAZADA_SG)
-    - 20 SKUs, DELIVERED/RETURNED/CANCELLED_REFUND, Singles Day + Black Friday spikes
-    - NDJSON partitioned marketplace=/date=/ — rtlog_orig_sys: "MKT"
-  - **Olist Bronze** (`ingestion/olist/`):
-    - `bronze_olist.py` — all 9 tables, enforced StructType schemas, quality checks
-  - **Weather** (`ingestion/weather/`):
-    - `generate_weather.py` — synthetic seasonal climate profiles, 26 stores
-    - `fetch_weather.py` — real ERA5 data via Open-Meteo API (free, no key)
-    - `run_weather.py` — interactive orchestrator: popup → fetch or generate → CSV
-    - `bronze_weather.py` — Databricks notebook, MERGE on (date × store)
-    - `sample_data/weather_2023_2024.csv` — 19,006 rows fixture
-  - **Shared UI** (`ingestion/ui_selector.py`):
-    - Tkinter popups: ask_source() / ask_retry_or_fallback() / run_with_loading()
-    - run_with_loading uses threading.Thread to keep UI alive during API calls
-    - Both run_*.py scripts accept --mode synthetic/realtime to skip popup for automation
+### Module 2 — Batch Sources & Additional Channels (`ingestion/`)
+- **FX rates** — synthetic GBM + ECB API, 5 currencies, MERGE on (date × currency)
+- **Marketplace simulator** — 7 marketplaces, 20 SKUs, partitioned NDJSON, `RTLOG_ORIG_SYS='MKT'`
+- **Olist Bronze** — 9 CSVs with enforced StructType schemas
+- **Weather** — synthetic seasonal + Open-Meteo ERA5 API, 26 stores
+- **Shared UI** — Tkinter popups for interactive source selection
+
+### Module 2b — ADLS Sync Console (`adls_sync_console/`)
+- Streamlit app: connection page + adhoc upload + scheduler + statistics
+- ThreadPoolExecutor (8 workers), validation rules per source, 500-run history
+- Uploads via service principal in `.env`
+
+### Module 3 Phase A — Storage + Unity Catalog (DONE 2026-05-20)
+- 8 ADLS containers provisioned: `raw`, `bronze`, `silver`, `gold`, `quarantine`, `checkpoints`, `artifacts` (+ `$logs`)
+- Access connector granted Storage Blob Data Contributor (storage-account scope)
+- 7 external locations: `ext_raw`, `ext_bronze`, `ext_silver`, `ext_gold`, `ext_quarantine`, `ext_checkpoints`, `ext_artifacts`
+- Catalog `retaildp` created with 4 schemas (`bronze`, `silver`, `gold`, `quarantine`), each with managed location pointing to its container
+
+| 3 | Medallion Lakehouse (Bronze → Silver ReSA → Gold) | `transformations/` | **Phase A in progress** (storage + UC done; smoke test pending) |
+Modules 1, 2, 2b complete. Module 3 Phase A storage + Unity Catalog setup done — final smoke test and Phase B (compute + Repos) pending.
+
+
+**Convention change:** > 
+- **Quarantine, don't drop** — records that fail DLT expectations or conformance checks go to
+the `retaildp.quarantine` schema (source-prefixed table names, e.g. `pos_rejects`,
+`silver_sa_tran_head_rejects`), each with a `rejection_reason` column. Never silently
+discard bad rows. See `docs/azure_databricks_state.md` §5 for rationale.
+
+- **Active catalog is `retaildp`** — all tables are created under `retaildp.{bronze,silver,gold,quarantine}`. The auto-created workspace catalog `dbw_retaildp_001` is unused. Every notebook should start with `USE CATALOG retaildp;`.
+
+
+
+---
 
 ## In progress
-- Nothing. Clean stopping point.
 
-## Next task when returning
-Start Module 3 — Medallion Lakehouse (`transformations/`).
-Goal: Bronze → Silver ReSA conformance for all three channels:
-  1. POS Auto Loader → `silver.sa_tran_*` (6 tables)
-  2. Marketplace feed → `silver.sa_tran_*` (same schema, RTLOG_ORIG_SYS='MKT')
-  3. Olist OMS orders → `silver.sa_tran_*` (RTLOG_ORIG_SYS='OMS')
-  4. `silver.sa_store_day` — store-level daily summary
-  5. FX normalisation using `bronze.fx_rates` for all monetary columns
-  See design doc §4.3 and `docs/resa_reference.md` for column specs.
+Module 3 Phase A Stage 5 — smoke test write into `retaildp.bronze` to close out Phase A.
+
+---
+
+## Next tasks (in order)
+
+1. **Phase A Stage 5** — Create and drop a test Delta table in `retaildp.bronze`, confirm physical files land in the `bronze` container. See `docs/module3_progress.md` for the SQL.
+
+2. **Phase B Stage 6** — Provision a small Databricks cluster: Single User, Runtime 13.3 LTS (or later), smallest worker, autoterminate 30 min.
+
+3. **Phase B Stage 7** — Generate GitHub PAT, link Databricks Repos to `satyakiguha007/retail-data-platform`, clone into workspace.
+
+4. **First Bronze notebook** — `transformations/bronze/01_fx_rates.py`. The simplest pattern (flat CSV → Delta MERGE). A draft was prepared in an earlier session; place it in the Repos clone, run, commit, push.
+
+5. **Remaining Bronze notebooks** — `02_weather`, `05_olist`, `03_pos_rtlog`, `04_marketplace` in that order (easy → hard).
+
+---
+
+## Bootstrap reading for Claude at session start
+
+In priority order:
+
+1. `CLAUDE.md` — project conventions, module status, reference doc index
+2. `docs/context_for_claude.md` — this file (current state)
+3. `docs/azure_databricks_state.md` — live cloud configuration (containers, UC, paths)
+4. `docs/module3_progress.md` — granular Module 3 checklist
+5. `docs/folder_structure.md` — repo + ADLS folder layout
+6. `docs/resa_reference.md` — SA_* column specs (read when Silver work begins)
+
+
+
+| Question | Go to |
+|---|---|
+| Live cloud state (Azure resources, UC catalog, external locations, paths) | `docs/azure_databricks_state.md` |
+| Module 3 granular progress and Bronze/Silver/Gold checklist | `docs/module3_progress.md` |
+
+The first four are short and should always be loaded. The other two are deep references —
+load on demand when working on specific modules.
