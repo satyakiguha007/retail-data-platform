@@ -12,7 +12,7 @@ Retail Data Platform. Load this at session start so architecture is never re-exp
 | Resource | Name | Notes |
 |---|---|---|
 | Storage account (ADLS Gen2) | `stretaildpsatyaki01` | Hierarchical namespace enabled |
-| Databricks workspace | `dbw-retaildp-001` | Premium tier, Unity Catalog enabled |
+| Databricks workspace | `dbw-retaildp-001` | **Serverless workspace** — Unity Catalog enabled |
 | Access connector for Databricks | (managed identity) | Granted **Storage Blob Data Contributor** at storage-account scope |
 | Service principal (local-only) | `sp-retaildp-simulator-001` | Used by `adls_sync_console/` for local→cloud uploads via `.env` |
 
@@ -88,7 +88,28 @@ All schemas are owned by `satyakiguha007@gmail.com`.
 
 ---
 
-## 4. Standard path references (for use in code)
+## 4. Compute model — Serverless only
+
+The workspace is configured serverless. **No classic clusters used or needed.**
+
+| Compute | Type | Used for |
+|---|---|---|
+| SQL Warehouse (Serverless Starter Warehouse) | Serverless SQL, 2X-Small | SQL Editor, ad-hoc queries, dashboards |
+| Serverless Notebook Compute | Serverless Python/Scala/R/SQL | All PySpark notebooks (Bronze, Silver, Gold), Auto Loader, Structured Streaming |
+
+### Implications for notebook code
+
+- **Library installs**: `%pip install <pkg>` at notebook scope — does NOT persist across sessions. Reinstall at top of notebook each time, or pin versions in a setup cell.
+- **`dbutils.fs`**: some operations restricted on serverless. Prefer `spark.read.format(...).load(path)` and `spark.write.save(path)` over `dbutils.fs.cp` where possible.
+- **Cluster-level Spark conf**: don't use `spark.conf.set("spark.databricks...")` for cluster-wide settings — set at session scope instead.
+- **Auto Loader**: fully supported. `cloudFiles.schemaLocation` and `checkpointLocation` should point at `ext_checkpoints` paths.
+- **Structured Streaming**: supported with some restrictions vs classic. For Bronze append-only patterns it works cleanly.
+- **No autotermination setting** — serverless auto-releases after ~10 min idle.
+- **Per-second billing** — no cost when idle. Cheaper for dev/portfolio work than classic clusters.
+
+---
+
+## 5. Standard path references (for use in code)
 
 ```python
 # Top of every Databricks notebook
@@ -122,7 +143,7 @@ CHECKPOINTS + "<source>/state/"      # checkpointLocation
 
 ---
 
-## 5. Updated convention — quarantine
+## 6. Updated convention — quarantine
 
 The original `CLAUDE.md` referenced `silver._quarantine` as the location for rejected rows.
 **This is superseded.** The new convention:
@@ -137,13 +158,10 @@ so burying quarantine inside `silver.*` doesn't fit cleanly.
 
 ---
 
-## 6. What's pending in Module 3
+## 7. Phase A status
 
-- [ ] Phase A Stage 5 — smoke test write into `retaildp.bronze`
-- [ ] Phase B Stage 6 — create compute cluster (Single User, 13.3 LTS or later)
-- [ ] Phase B Stage 7 — connect Databricks Repos to `satyakiguha007/retail-data-platform`
-- [ ] Bronze notebooks (5 files in `transformations/bronze/`)
-- [ ] Silver notebooks (8 files in `transformations/silver/`)
-- [ ] Gold notebooks (4 dims + 2 facts in `transformations/gold/`)
+✅ **Phase A closed (2026-05-20)** — smoke test write/read against `retaildp.bronze` succeeded; physical files confirmed in `bronze` container.
 
-See `docs/module3_progress.md` for the granular checklist.
+Phase B Stage 6 (serverless compute) also verified — both SQL Warehouse and serverless notebook compute can read the raw container via UC.
+
+**Pending:** Stage 7 (Databricks Git folder ↔ GitHub), then Bronze notebooks.

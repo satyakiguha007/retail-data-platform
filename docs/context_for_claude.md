@@ -22,45 +22,39 @@ Last updated: 2026-05-20
 - ThreadPoolExecutor (8 workers), validation rules per source, 500-run history
 - Uploads via service principal in `.env`
 
-### Module 3 Phase A — Storage + Unity Catalog (DONE 2026-05-20)
+### Module 3 Phase A — Storage + Unity Catalog ✅ CLOSED 2026-05-20
 - 8 ADLS containers provisioned: `raw`, `bronze`, `silver`, `gold`, `quarantine`, `checkpoints`, `artifacts` (+ `$logs`)
 - Access connector granted Storage Blob Data Contributor (storage-account scope)
 - 7 external locations: `ext_raw`, `ext_bronze`, `ext_silver`, `ext_gold`, `ext_quarantine`, `ext_checkpoints`, `ext_artifacts`
-- Catalog `retaildp` created with 4 schemas (`bronze`, `silver`, `gold`, `quarantine`), each with managed location pointing to its container
+- Catalog `retaildp` created with 4 schemas (`bronze`, `silver`, `gold`, `quarantine`), each with managed location
+- **Smoke test passed**: wrote table to `retaildp.bronze`, confirmed physical files in `bronze` container
 
-| 3 | Medallion Lakehouse (Bronze → Silver ReSA → Gold) | `transformations/` | **Phase A in progress** (storage + UC done; smoke test pending) |
-Modules 1, 2, 2b complete. Module 3 Phase A storage + Unity Catalog setup done — final smoke test and Phase B (compute + Repos) pending.
+**Convention change:** quarantine is a top-level schema (`retaildp.quarantine`), not `silver._quarantine`. See `docs/azure_databricks_state.md` §5.
 
-
-**Convention change:** > 
-- **Quarantine, don't drop** — records that fail DLT expectations or conformance checks go to
-the `retaildp.quarantine` schema (source-prefixed table names, e.g. `pos_rejects`,
-`silver_sa_tran_head_rejects`), each with a `rejection_reason` column. Never silently
-discard bad rows. See `docs/azure_databricks_state.md` §5 for rationale.
-
-- **Active catalog is `retaildp`** — all tables are created under `retaildp.{bronze,silver,gold,quarantine}`. The auto-created workspace catalog `dbw_retaildp_001` is unused. Every notebook should start with `USE CATALOG retaildp;`.
-
-
+### Module 3 Phase B Stage 6 — Compute ✅ Done 2026-05-20
+- **Serverless notebook compute** verified: SQL + Python both read raw container via UC
+- **Serverless SQL Warehouse** (auto-created Starter) used for SQL Editor
+- **No classic clusters** — entire project runs on serverless
 
 ---
 
 ## In progress
 
-Module 3 Phase A Stage 5 — smoke test write into `retaildp.bronze` to close out Phase A.
+Module 3 Phase B Stage 7 — Connect Databricks Git folder to `satyakiguha007/retail-data-platform` (GitHub PAT + Git folder add).
 
 ---
 
 ## Next tasks (in order)
 
-1. **Phase A Stage 5** — Create and drop a test Delta table in `retaildp.bronze`, confirm physical files land in the `bronze` container. See `docs/module3_progress.md` for the SQL.
+1. **Stage 7** — Generate GitHub PAT, link in Databricks, add Git folder pointing at the repo. Verify clone lands at `/Workspace/Users/satyakiguha007@gmail.com/retail-data-platform/`.
 
-2. **Phase B Stage 6** — Provision a small Databricks cluster: Single User, Runtime 13.3 LTS (or later), smallest worker, autoterminate 30 min.
+2. **Stage 8** — Confirm `transformations/bronze/` is visible and empty in the workspace.
 
-3. **Phase B Stage 7** — Generate GitHub PAT, link Databricks Repos to `satyakiguha007/retail-data-platform`, clone into workspace.
+3. **First Bronze notebook** — `transformations/bronze/01_fx_rates.py`. Simplest pattern (flat CSV → Delta MERGE). A draft was prepared in an earlier session; place it in the Git folder clone, run on serverless, commit, push.
 
-4. **First Bronze notebook** — `transformations/bronze/01_fx_rates.py`. The simplest pattern (flat CSV → Delta MERGE). A draft was prepared in an earlier session; place it in the Repos clone, run, commit, push.
+4. **Remaining Bronze notebooks** — `02_weather`, `05_olist`, `03_pos_rtlog`, `04_marketplace` in that order (easy → hard).
 
-5. **Remaining Bronze notebooks** — `02_weather`, `05_olist`, `03_pos_rtlog`, `04_marketplace` in that order (easy → hard).
+5. **Silver** then **Gold** (see `docs/module3_progress.md` for granular checklist).
 
 ---
 
@@ -70,17 +64,9 @@ In priority order:
 
 1. `CLAUDE.md` — project conventions, module status, reference doc index
 2. `docs/context_for_claude.md` — this file (current state)
-3. `docs/azure_databricks_state.md` — live cloud configuration (containers, UC, paths)
+3. `docs/azure_databricks_state.md` — live cloud configuration (containers, UC, paths, compute model)
 4. `docs/module3_progress.md` — granular Module 3 checklist
 5. `docs/folder_structure.md` — repo + ADLS folder layout
-6. `docs/resa_reference.md` — SA_* column specs (read when Silver work begins)
+6. `docs/resa_reference.md` — SA_* column specs (load when Silver work begins)
 
-
-
-| Question | Go to |
-|---|---|
-| Live cloud state (Azure resources, UC catalog, external locations, paths) | `docs/azure_databricks_state.md` |
-| Module 3 granular progress and Bronze/Silver/Gold checklist | `docs/module3_progress.md` |
-
-The first four are short and should always be loaded. The other two are deep references —
-load on demand when working on specific modules.
+The first four are short and should always be loaded. The other two are deep references — load on demand.

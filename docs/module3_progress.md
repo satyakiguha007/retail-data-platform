@@ -1,38 +1,20 @@
 # Module 3 — Medallion Lakehouse Progress
 
 **Folder:** `transformations/`
-**Status:** Phase A (storage + catalog) nearly complete; Phase B + Bronze notebooks pending
+**Status:** Phase A complete; Phase B Stage 6 complete; Stage 7 (Repos) next
 **Last updated:** 2026-05-20
 
 ---
 
-## Phase A — Storage + Catalog
+## Phase A — Storage + Catalog ✅ COMPLETE
 
 | Stage | What | Status |
 |---|---|---|
 | 1 | Verify storage credential and `ext_raw` external location | ✅ Done |
-| 2 | Create bronze, silver, gold containers in ADLS (+ checkpoints, quarantine, artifacts added beyond original plan) | ✅ Done |
-| 3 | Create external locations: `ext_bronze`, `ext_silver`, `ext_gold`, `ext_quarantine`, `ext_checkpoints`, `ext_artifacts` | ✅ Done |
-| 4 | Create catalog `retaildp` + schemas `bronze`, `silver`, `gold`, `quarantine` with managed locations | ✅ Done |
-| 5 | Smoke test — write a table into `retaildp.bronze`, verify physical path lands in `bronze` container | ⏸ **Next** |
-
-### Stage 5 smoke test (when you return)
-
-```sql
-USE CATALOG retaildp;
-
-CREATE TABLE bronze._smoke_test AS
-SELECT 1 AS x, current_timestamp() AS created_at;
-
-DESCRIBE EXTENDED bronze._smoke_test;
--- Confirm `Location` starts with abfss://bronze@stretaildpsatyaki01...
-
-SELECT * FROM bronze._smoke_test;
-
-DROP TABLE bronze._smoke_test;
-```
-
-If the location resolves correctly and the SELECT returns one row, Phase A is closed.
+| 2 | Create bronze, silver, gold + checkpoints, quarantine, artifacts containers | ✅ Done |
+| 3 | Create external locations for all 7 containers | ✅ Done |
+| 4 | Create catalog `retaildp` + schemas with managed locations | ✅ Done |
+| 5 | Smoke test — wrote table to `retaildp.bronze`, verified physical files in `bronze` container | ✅ Done |
 
 ---
 
@@ -40,33 +22,43 @@ If the location resolves correctly and the SELECT returns one row, Phase A is cl
 
 | Stage | What | Status |
 |---|---|---|
-| 6 | Create cluster (Single User, 13.3 LTS or later, smallest worker, autoterminate 30 min) | ⏸ Pending |
-| 7 | Generate GitHub PAT, connect Databricks Repos to `satyakiguha007/retail-data-platform`, clone | ⏸ Pending |
-| 8 | Verify `/Workspace/Repos/.../transformations/bronze/` visible and empty | ⏸ Pending |
+| 6 | Serverless notebook compute verified (SQL + Python read of raw works) | ✅ Done |
+| 7 | Generate GitHub PAT, connect Databricks Git folder to `satyakiguha007/retail-data-platform` | ⏸ **Next** |
+| 8 | Verify `transformations/bronze/` visible in workspace, ready for first notebook | ⏸ Pending |
+
+### Compute model — important
+
+This workspace uses **serverless compute exclusively**:
+
+- **SQL Warehouse** (Serverless Starter Warehouse, auto-created) → SQL Editor, dashboards
+- **Serverless Notebook Compute** → All PySpark notebooks (Bronze/Silver/Gold)
+- **No classic clusters** — don't reference cluster IDs or `spark.conf.set` cluster-level settings in notebooks
+
+Implications for code:
+- Library installs use `%pip install <pkg>` at notebook scope (don't persist across sessions)
+- `dbutils.fs` has some restrictions — prefer `spark.read` / `spark.write` paths
+- Auto Loader and Structured Streaming both work on serverless
+- Per-second billing, no idle cost
 
 ---
 
 ## Bronze notebooks (5)
 
-Build order — simplest first, so the Auto Loader pattern is learned on easy data before
-the nested POS RTLOG schema is tackled.
+Build order — simplest first.
 
 | Order | Notebook | Pattern | Status |
 |---|---|---|---|
-| 1 | `01_fx_rates.py` | Flat CSV → Delta, MERGE on (date, currency) | ⏸ Drafted in last session, not yet placed |
-| 2 | `02_weather.py` | Clone-and-modify of `01` — different keys (date, store) | ⏸ Pending |
-| 3 | `05_olist.py` | 9 static CSVs in a loop, enforced StructType schemas, overwrite (not MERGE) | ⏸ Pending |
+| 1 | `01_fx_rates.py` | Flat CSV → Delta, MERGE on (date, currency) | ⏸ Drafted earlier, not yet placed |
+| 2 | `02_weather.py` | Clone-and-modify of `01` | ⏸ Pending |
+| 3 | `05_olist.py` | 9 static CSVs in a loop, enforced StructType, overwrite | ⏸ Pending |
 | 4 | `03_pos_rtlog.py` | Auto Loader, nested JSON, partition discovery on `store/date/hour` | ⏸ Pending |
-| 5 | `04_marketplace.py` | Auto Loader, flatter NDJSON, partition on `marketplace/date` | ⏸ Pending |
-
-After all five are running, Bronze is closed and Silver work begins.
+| 5 | `04_marketplace.py` | Auto Loader, flatter NDJSON | ⏸ Pending |
 
 ---
 
 ## Silver notebooks (8) — Not started
 
-ReSA SA_* canonical, one notebook per table. All channels (POS / MKT / OMS) land in the
-same Silver tables, differentiated by `RTLOG_ORIG_SYS`.
+ReSA SA_* canonical, one notebook per table. All channels (POS / MKT / OMS) land in same Silver tables, differentiated by `RTLOG_ORIG_SYS`.
 
 - [ ] `01_sa_tran_head.py`
 - [ ] `02_sa_tran_item.py`
@@ -77,10 +69,8 @@ same Silver tables, differentiated by `RTLOG_ORIG_SYS`.
 - [ ] `07_sa_store_day.py`
 - [ ] `08_sa_store_data.py`
 
-Monetary columns join to `retaildp.bronze.fx_rates` and produce a `*_usd` column in addition
-to the original currency value.
-
-Rejected rows land in `retaildp.quarantine.silver_<table>_rejects` with a `rejection_reason`.
+Monetary columns join to `retaildp.bronze.fx_rates` to produce `*_usd` companions.
+Rejected rows land in `retaildp.quarantine.silver_<table>_rejects` with `rejection_reason`.
 
 ---
 
@@ -88,7 +78,7 @@ Rejected rows land in `retaildp.quarantine.silver_<table>_rejects` with a `rejec
 
 - [ ] `dim_store.py`, `dim_product.py`, `dim_date.py`, `dim_customer.py`
 - [ ] `fact_sales_line.py`
-- [ ] `fact_audit_error.py` (built later, after Module 4 audit engine)
+- [ ] `fact_audit_error.py` (after Module 4 audit engine)
 
 ---
 
