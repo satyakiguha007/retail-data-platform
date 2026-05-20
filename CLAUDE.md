@@ -33,18 +33,41 @@ QA experience as a portfolio differentiator.
 | Authoritative column names, types, nullability for all 11 SA_* tables | `docs/resa_reference.md` |
 | Audit rule catalog (18 rules, ERROR_CODEs, triggers) | Design doc §4.4 |
 | Repo layout and CI/CD | Design doc §5 |
+| Full repo + ADLS folder structure with paths | `docs/folder_structure.md` |
 
 ## Module structure and status
 | # | Module | Folder | Status |
 |---|---|---|---|
 | 1 | POS RTLOG Simulator | `pos_simulator/` | **Complete** |
 | 2 | Batch Sources & Additional Channels | `ingestion/` | **Complete** |
+| 2b | ADLS Sync Console | `adls_sync_console/` | **Complete** |
 | 3 | Medallion Lakehouse (Bronze → Silver ReSA → Gold) | `transformations/` | Not started |
 | 4 | Sales Audit Layer (18 rules → SA_ERROR) | `audit/` | Not started |
 | 5 | LLM Intelligence Layer | `llm/` | Not started |
 | 6 | Serving & Visualization (Power BI) | `serving/` | Not started |
 
-Module 1 complete. Module 2 is next.
+Modules 1 and 2 complete, including ADLS sync. Module 3 is next.
+
+## ADLS Sync Console (`adls_sync_console/`)
+Streamlit operator UI that bridges local data generation with cloud-side ingestion. Pushes all
+local output files to Azure Data Lake Storage Gen2 (`stretaildpsatyaki01`) — folder structure is
+preserved end-to-end so Auto Loader picks up files at the same relative paths.
+
+**Storage account**: `stretaildpsatyaki01` (ADLS Gen2)  
+**Auth**: `ClientSecretCredential` via `.env` (`AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `AZURE_STORAGE_ACCOUNT`)
+
+**Local → ADLS container/path mapping**:
+| Local path | ADLS target (`raw` container) |
+|---|---|
+| `output/pos_rtlog/` | `raw/pos/` |
+| `output/smoke_test/` | `raw/pos/` |
+| `output/mkt_feed/` | `raw/marketplace/` |
+| `ingestion/fx_rates/sample_data/` | `raw/fx-rates/` |
+| `ingestion/weather/sample_data/` | `raw/weather/` |
+| `data/landing/olist/` | `raw/olist/` |
+
+Run with: `cd adls_sync_console && streamlit run app.py` (activate project venv first).  
+See `docs/folder_structure.md` for full ADLS path layout.
 
 ## Out of scope for v1
 - Training custom ML models (we use pre-trained LLMs only)
