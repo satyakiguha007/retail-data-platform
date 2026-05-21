@@ -1,7 +1,7 @@
 # Module 3 — Medallion Lakehouse Progress
 
 **Folder:** `transformations/`
-**Status:** Phase A complete; Phase B Stage 6 complete; Stage 7 (Repos) next
+**Status:** Phase A + B complete; first Bronze notebook done; building remaining Bronze
 **Last updated:** 2026-05-20
 
 ---
@@ -18,27 +18,32 @@
 
 ---
 
-## Phase B — Compute + Repos
+## Phase B — Compute + Repos ✅ COMPLETE
 
 | Stage | What | Status |
 |---|---|---|
 | 6 | Serverless notebook compute verified (SQL + Python read of raw works) | ✅ Done |
-| 7 | Generate GitHub PAT, connect Databricks Git folder to `satyakiguha007/retail-data-platform` | ⏸ **Next** |
-| 8 | Verify `transformations/bronze/` visible in workspace, ready for first notebook | ⏸ Pending |
+| 7 | GitHub PAT linked, Git folder cloned `retail-data-platform`, test notebook committed and pushed | ✅ Done |
+| 8 | `transformations/bronze/` visible in workspace, ready for first notebook | ✅ Done |
 
 ### Compute model — important
 
 This workspace uses **serverless compute exclusively**:
 
-- **SQL Warehouse** (Serverless Starter Warehouse, auto-created) → SQL Editor, dashboards
+- **SQL Warehouse** (Serverless Starter Warehouse) → SQL Editor, dashboards
 - **Serverless Notebook Compute** → All PySpark notebooks (Bronze/Silver/Gold)
-- **No classic clusters** — don't reference cluster IDs or `spark.conf.set` cluster-level settings in notebooks
+- **No classic clusters** — don't reference cluster IDs or `spark.conf.set` cluster-level settings
 
 Implications for code:
 - Library installs use `%pip install <pkg>` at notebook scope (don't persist across sessions)
 - `dbutils.fs` has some restrictions — prefer `spark.read` / `spark.write` paths
+- `input_file_name()` is **blocked** — use `col("_metadata.file_path")` instead (see notebook 01 for working example)
 - Auto Loader and Structured Streaming both work on serverless
 - Per-second billing, no idle cost
+
+### GitHub auth — useful nuance
+
+Databricks Git folders authenticate **only on writes** (push). For a public repo, **clone and pull work anonymously**; the linked PAT is consulted only when you try to commit & push. If you set up the credential *after* cloning, the clone will succeed but the first push will fail until the PAT is linked. Either order works.
 
 ---
 
@@ -48,11 +53,25 @@ Build order — simplest first.
 
 | Order | Notebook | Pattern | Status |
 |---|---|---|---|
-| 1 | `01_fx_rates.py` | Flat CSV → Delta, MERGE on (date, currency) | ⏸ Drafted earlier, not yet placed |
-| 2 | `02_weather.py` | Clone-and-modify of `01` | ⏸ Pending |
+| 1 | `01_fx_rates.py` | Flat CSV → Delta, MERGE on (date, currency) | ✅ Done |
+| 2 | `02_weather.py` | Clone-and-modify of `01`; MERGE on (date, store_id) | ⏸ **Next** |
 | 3 | `05_olist.py` | 9 static CSVs in a loop, enforced StructType, overwrite | ⏸ Pending |
 | 4 | `03_pos_rtlog.py` | Auto Loader, nested JSON, partition discovery on `store/date/hour` | ⏸ Pending |
 | 5 | `04_marketplace.py` | Auto Loader, flatter NDJSON | ⏸ Pending |
+
+### Bronze template established (from `01_fx_rates.py`)
+
+1. Config block — declare catalog/schema/table + raw path constants
+2. Strict StructType — no schema inference
+3. Read with `FAILFAST` mode
+4. 4 quality gates (null check, value-range check, time-bound check, format check)
+5. Add ingestion metadata: `_ingest_ts = current_timestamp()`, `_source_file = col("_metadata.file_path")`
+6. `CREATE TABLE IF NOT EXISTS` with `delta.autoOptimize.optimizeWrite=true`
+7. MERGE INTO on natural key
+8. Summary by partition column
+9. `DESCRIBE EXTENDED` to verify physical location
+
+All four remaining Bronze notebooks follow this pattern with source-specific modifications.
 
 ---
 

@@ -54,8 +54,7 @@ Storage Blob Data Contributor on each.
 
 ### 3.2 Storage credential
 
-A single credential wraps the access connector. The same credential backs all 7 external
-locations. (Exact name visible via `SHOW STORAGE CREDENTIALS`.)
+A single credential wraps the access connector. The same credential backs all 7 external locations.
 
 ### 3.3 External locations (7)
 
@@ -79,7 +78,7 @@ SHOW SCHEMAS;
 
 | Schema | Managed location | Naming convention |
 |---|---|---|
-| `retaildp.bronze` | `abfss://bronze@.../` | One table per raw source: `pos_rtlog`, `marketplace`, `olist_*`, `fx_rates`, `weather` |
+| `retaildp.bronze` | `abfss://bronze@.../` | One table per raw source: `fx_rates`, `weather`, `olist_*`, `pos_rtlog`, `marketplace` |
 | `retaildp.silver` | `abfss://silver@.../` | ReSA canonical: `sa_tran_head`, `sa_tran_item`, `sa_tran_disc`, `sa_tran_tender`, `sa_tran_tax`, `sa_tran_igtax`, `sa_store_day`, `sa_store_data` |
 | `retaildp.gold` | `abfss://gold@.../` | Kimball: `dim_*`, `fact_*` |
 | `retaildp.quarantine` | `abfss://quarantine@.../` | Source-prefixed: `pos_rejects`, `marketplace_rejects`, `silver_sa_tran_head_rejects`, etc. Every table has a `rejection_reason` column |
@@ -97,7 +96,7 @@ The workspace is configured serverless. **No classic clusters used or needed.**
 | SQL Warehouse (Serverless Starter Warehouse) | Serverless SQL, 2X-Small | SQL Editor, ad-hoc queries, dashboards |
 | Serverless Notebook Compute | Serverless Python/Scala/R/SQL | All PySpark notebooks (Bronze, Silver, Gold), Auto Loader, Structured Streaming |
 
-### Implications for notebook code
+### 4.1 Implications for notebook code
 
 - **Library installs**: `%pip install <pkg>` at notebook scope — does NOT persist across sessions. Reinstall at top of notebook each time, or pin versions in a setup cell.
 - **`dbutils.fs`**: some operations restricted on serverless. Prefer `spark.read.format(...).load(path)` and `spark.write.save(path)` over `dbutils.fs.cp` where possible.
@@ -107,61 +106,13 @@ The workspace is configured serverless. **No classic clusters used or needed.**
 - **No autotermination setting** — serverless auto-releases after ~10 min idle.
 - **Per-second billing** — no cost when idle. Cheaper for dev/portfolio work than classic clusters.
 
----
+### 4.2 UC serverless restrictions encountered (and resolved)
 
-## 5. Standard path references (for use in code)
+| Function / operation | Status on UC serverless | Use instead |
+|---|---|---|
+| `input_file_name()` | ❌ Blocked (`UC_COMMAND_NOT_SUPPORTED`) | `col("_metadata.file_path")` |
+| RDD `.rdd.map(...)` patterns | ❌ Blocked | DataFrame transformations only |
+| `spark._jvm` / `_jsparkSession` JVM access | ❌ Blocked | Pure PySpark APIs |
+| `spark.sparkContext.setJobGroup(...)` | ⚠️ Restricted | Skip; rely on cell-level tagging in UI |
 
-```python
-# Top of every Databricks notebook
-RAW         = "abfss://raw@stretaildpsatyaki01.dfs.core.windows.net/"
-BRONZE      = "abfss://bronze@stretaildpsatyaki01.dfs.core.windows.net/"
-SILVER      = "abfss://silver@stretaildpsatyaki01.dfs.core.windows.net/"
-GOLD        = "abfss://gold@stretaildpsatyaki01.dfs.core.windows.net/"
-QUARANTINE  = "abfss://quarantine@stretaildpsatyaki01.dfs.core.windows.net/"
-CHECKPOINTS = "abfss://checkpoints@stretaildpsatyaki01.dfs.core.windows.net/"
-ARTIFACTS   = "abfss://artifacts@stretaildpsatyaki01.dfs.core.windows.net/"
-
-CATALOG     = "retaildp"
-```
-
-Per-source raw paths follow the patterns established by Modules 1 + 2:
-
-```
-RAW + "pos/store=<n>/date=<YYYY-MM-DD>/hour=<HH>/rtlog.ndjson"
-RAW + "marketplace/marketplace=<NAME>/date=<YYYY-MM-DD>/feed.ndjson"
-RAW + "olist/<file>.csv"
-RAW + "fx-rates/<file>.csv"
-RAW + "weather/<file>.csv"
-```
-
-Checkpoint paths follow the per-source pattern:
-
-```
-CHECKPOINTS + "<source>/schema/"     # cloudFiles.schemaLocation
-CHECKPOINTS + "<source>/state/"      # checkpointLocation
-```
-
----
-
-## 6. Updated convention — quarantine
-
-The original `CLAUDE.md` referenced `silver._quarantine` as the location for rejected rows.
-**This is superseded.** The new convention:
-
-- Rejected rows go to the top-level `retaildp.quarantine` schema
-- Table names are source-prefixed: `pos_rejects`, `silver_sa_tran_head_rejects`, etc.
-- Every quarantine table has a `rejection_reason STRING` column
-- Quarantine is its own container in ADLS (`quarantine/`) for separate lifecycle management
-
-Rationale: rejects originate from bronze ingestion as well as silver expectation failures,
-so burying quarantine inside `silver.*` doesn't fit cleanly.
-
----
-
-## 7. Phase A status
-
-✅ **Phase A closed (2026-05-20)** — smoke test write/read against `retaildp.bronze` succeeded; physical files confirmed in `bronze` container.
-
-Phase B Stage 6 (serverless compute) also verified — both SQL Warehouse and serverless notebook compute can read the raw container via UC.
-
-**Pending:** Stage 7 (Databricks Git folder ↔ GitHub), then Bronze notebooks.
+The `_metadata` struct is available on all file-source DataFrames (CSV, JSON, Parquet, Avro). Its fields:
