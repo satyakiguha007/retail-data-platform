@@ -1,6 +1,6 @@
 # Azure + Databricks State — Cloud Configuration Reference
 
-**Last verified:** 2026-05-20
+**Last verified:** 2026-05-21
 **Owner:** Satyaki Guha
 **Purpose:** Single source of truth for the cloud infrastructure provisioned for the
 Retail Data Platform. Load this at session start so architecture is never re-explained.
@@ -49,7 +49,7 @@ Storage Blob Data Contributor on each.
 
 | Catalog | Status | Use |
 |---|---|---|
-| `dbw_retaildp_001` | Auto-created on workspace provisioning | **Unused** — kept around but no tables |
+| `dbw_retaildp_001` | Auto-created on workspace provisioning | **Unused** |
 | `retaildp` | Active project catalog | **All project work goes here** |
 
 ### 3.2 Storage credential
@@ -76,14 +76,14 @@ SHOW SCHEMAS;
 -- bronze, silver, gold, quarantine, information_schema
 ```
 
-| Schema | Managed location | Naming convention |
+| Schema | Managed location | Tables (current state) |
 |---|---|---|
-| `retaildp.bronze` | `abfss://bronze@.../` | One table per raw source: `fx_rates`, `weather`, `olist_*`, `pos_rtlog`, `marketplace` |
-| `retaildp.silver` | `abfss://silver@.../` | ReSA canonical: `sa_tran_head`, `sa_tran_item`, `sa_tran_disc`, `sa_tran_tender`, `sa_tran_tax`, `sa_tran_igtax`, `sa_store_day`, `sa_store_data` |
-| `retaildp.gold` | `abfss://gold@.../` | Kimball: `dim_*`, `fact_*` |
-| `retaildp.quarantine` | `abfss://quarantine@.../` | Source-prefixed: `pos_rejects`, `marketplace_rejects`, `silver_sa_tran_head_rejects`, etc. Every table has a `rejection_reason` column |
+| `retaildp.bronze` | `abfss://bronze@.../` | `fx_rates`, `weather`, `olist_*` (9 tables), `pos_rtlog`, `marketplace` — **13 tables, all populated** |
+| `retaildp.silver` | `abfss://silver@.../` | Empty — to be populated by Silver layer notebooks |
+| `retaildp.gold` | `abfss://gold@.../` | Empty — to be populated by Gold layer notebooks |
+| `retaildp.quarantine` | `abfss://quarantine@.../` | Empty — populated as Silver expectations fail |
 
-All schemas are owned by `satyakiguha007@gmail.com`.
+All schemas owned by `satyakiguha007@gmail.com`.
 
 ---
 
@@ -98,19 +98,21 @@ The workspace is configured serverless. **No classic clusters used or needed.**
 
 ### 4.1 Implications for notebook code
 
-- **Library installs**: `%pip install <pkg>` at notebook scope — does NOT persist across sessions. Reinstall at top of notebook each time, or pin versions in a setup cell.
-- **`dbutils.fs`**: some operations restricted on serverless. Prefer `spark.read.format(...).load(path)` and `spark.write.save(path)` over `dbutils.fs.cp` where possible.
-- **Cluster-level Spark conf**: don't use `spark.conf.set("spark.databricks...")` for cluster-wide settings — set at session scope instead.
-- **Auto Loader**: fully supported. `cloudFiles.schemaLocation` and `checkpointLocation` should point at `ext_checkpoints` paths.
-- **Structured Streaming**: supported with some restrictions vs classic. For Bronze append-only patterns it works cleanly.
-- **No autotermination setting** — serverless auto-releases after ~10 min idle.
-- **Per-second billing** — no cost when idle. Cheaper for dev/portfolio work than classic clusters.
+- **Library installs**: `%pip install <pkg>` at notebook scope — does NOT persist across sessions
+- **`dbutils.fs`**: some operations restricted on serverless. Prefer `spark.read.format(...).load(path)` and `spark.write.save(path)`
+- **Cluster-level Spark conf**: don't use `spark.conf.set("spark.databricks...")` for cluster-wide settings — set at session scope instead
+- **Auto Loader**: fully supported. `cloudFiles.schemaLocation` and `checkpointLocation` should point at `ext_checkpoints` paths
+- **Structured Streaming**: supported with some restrictions vs classic. For Bronze append-only patterns it works cleanly
+- **No autotermination setting** — serverless auto-releases after ~10 min idle
+- **Per-second billing** — no cost when idle. ~₹500/day = ~$6/day at active dev pace
 
-### 4.2 UC serverless restrictions encountered (and resolved)
+### 4.2 UC Serverless restrictions encountered (hit during Bronze build)
 
 | Function / operation | Status on UC serverless | Use instead |
 |---|---|---|
 | `input_file_name()` | ❌ Blocked (`UC_COMMAND_NOT_SUPPORTED`) | `col("_metadata.file_path")` |
+| `display(pd.DataFrame(mixed_types))` | ❌ Arrow conversion fails on mixed-type columns | Cast columns to consistent type (`.astype(str)`) or use uniform types upstream |
+| `CLUSTER BY` on tables with deeply nested STRUCT columns | ❌ Stats schema doesn't cover cluster cols | Skip clustering at Bronze; design Silver/Gold schemas with cluster cols among the first 32, or set `delta.dataSkippingNumIndexedCols=64` |
 | RDD `.rdd.map(...)` patterns | ❌ Blocked | DataFrame transformations only |
 | `spark._jvm` / `_jsparkSession` JVM access | ❌ Blocked | Pure PySpark APIs |
 | `spark.sparkContext.setJobGroup(...)` | ⚠️ Restricted | Skip; rely on cell-level tagging in UI |

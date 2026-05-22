@@ -34,6 +34,8 @@ QA experience as a portfolio differentiator.
 | Audit rule catalog (18 rules, ERROR_CODEs, triggers) | Design doc §4.4 |
 | Repo layout and CI/CD | Design doc §5 |
 | Full repo + ADLS folder structure with paths | `docs/folder_structure.md` |
+| Bronze layer patterns, code walkthroughs, interview prep | `docs/bronze_layer_study_guide.md` |
+
 
 ## Module structure and status
 | # | Module | Folder | Status |
@@ -41,10 +43,12 @@ QA experience as a portfolio differentiator.
 | 1 | POS RTLOG Simulator | `pos_simulator/` | **Complete** |
 | 2 | Batch Sources & Additional Channels | `ingestion/` | **Complete** |
 | 2b | ADLS Sync Console | `adls_sync_console/` | **Complete** |
-| 3 | Medallion Lakehouse (Bronze → Silver ReSA → Gold) | `transformations/` | Not started |
+| 3 | Medallion Lakehouse (Bronze → Silver ReSA → Gold) | `transformations/` | **Bronze complete** (5 notebooks); Silver next |
 | 4 | Sales Audit Layer (18 rules → SA_ERROR) | `audit/` | Not started |
 | 5 | LLM Intelligence Layer | `llm/` | Not started |
 | 6 | Serving & Visualization (Power BI) | `serving/` | Not started |
+| 7 |Modules 1, 2, 2b complete. Module 3 Bronze layer complete (5 notebooks, 3 ingestion patterns). Silver layer (`SA_TRAN_*` canonical model) is the next concrete piece of work.
+
 
 Modules 1 and 2 complete, including ADLS sync. Module 3 is next.
 
