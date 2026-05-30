@@ -90,3 +90,6 @@ See `docs/folder_structure.md` for full ADLS path layout.
 7. Check `docs/retail_data_platform_design_v1.1.pdf` Appendix A (Decisions Log) before
    introducing any architectural change — the decision may already be settled.
 8. Each module should be independently demo-able when done; don't leave it in a broken state.
+
+
+Checkpoint paths don't follow the table's catalog namespace. The bronze pos_rtlog checkpoint lives at checkpoints/pos_rtlog/{state,schema}/, not checkpoints/bronze/pos_rtlog/. Always print(CHECKPOINT_LOCATION) before clearing rather than assuming the path. And to reset a streaming source after a bulk data replace, clear the checkpoint — don't rely on Auto Loader to re-discover swapped files.
