@@ -1,6 +1,6 @@
 # Azure + Databricks State — Cloud Configuration Reference
 
-**Last verified:** 2026-05-20
+**Last verified:** 2026-05-21
 **Owner:** Satyaki Guha
 **Purpose:** Single source of truth for the cloud infrastructure provisioned for the
 Retail Data Platform. Load this at session start so architecture is never re-explained.
@@ -49,13 +49,12 @@ Storage Blob Data Contributor on each.
 
 | Catalog | Status | Use |
 |---|---|---|
-| `dbw_retaildp_001` | Auto-created on workspace provisioning | **Unused** — kept around but no tables |
+| `dbw_retaildp_001` | Auto-created on workspace provisioning | **Unused** |
 | `retaildp` | Active project catalog | **All project work goes here** |
 
 ### 3.2 Storage credential
 
-A single credential wraps the access connector. The same credential backs all 7 external
-locations. (Exact name visible via `SHOW STORAGE CREDENTIALS`.)
+A single credential wraps the access connector. The same credential backs all 7 external locations.
 
 ### 3.3 External locations (7)
 
@@ -77,14 +76,14 @@ SHOW SCHEMAS;
 -- bronze, silver, gold, quarantine, information_schema
 ```
 
-| Schema | Managed location | Naming convention |
+| Schema | Managed location | Tables (current state) |
 |---|---|---|
-| `retaildp.bronze` | `abfss://bronze@.../` | One table per raw source: `pos_rtlog`, `marketplace`, `olist_*`, `fx_rates`, `weather` |
-| `retaildp.silver` | `abfss://silver@.../` | ReSA canonical: `sa_tran_head`, `sa_tran_item`, `sa_tran_disc`, `sa_tran_tender`, `sa_tran_tax`, `sa_tran_igtax`, `sa_store_day`, `sa_store_data` |
-| `retaildp.gold` | `abfss://gold@.../` | Kimball: `dim_*`, `fact_*` |
-| `retaildp.quarantine` | `abfss://quarantine@.../` | Source-prefixed: `pos_rejects`, `marketplace_rejects`, `silver_sa_tran_head_rejects`, etc. Every table has a `rejection_reason` column |
+| `retaildp.bronze` | `abfss://bronze@.../` | `fx_rates`, `weather`, `olist_*` (9 tables), `pos_rtlog`, `marketplace` — **13 tables, all populated** |
+| `retaildp.silver` | `abfss://silver@.../` | Empty — to be populated by Silver layer notebooks |
+| `retaildp.gold` | `abfss://gold@.../` | Empty — to be populated by Gold layer notebooks |
+| `retaildp.quarantine` | `abfss://quarantine@.../` | Empty — populated as Silver expectations fail |
 
-All schemas are owned by `satyakiguha007@gmail.com`.
+All schemas owned by `satyakiguha007@gmail.com`.
 
 ---
 
@@ -97,71 +96,25 @@ The workspace is configured serverless. **No classic clusters used or needed.**
 | SQL Warehouse (Serverless Starter Warehouse) | Serverless SQL, 2X-Small | SQL Editor, ad-hoc queries, dashboards |
 | Serverless Notebook Compute | Serverless Python/Scala/R/SQL | All PySpark notebooks (Bronze, Silver, Gold), Auto Loader, Structured Streaming |
 
-### Implications for notebook code
+### 4.1 Implications for notebook code
 
-- **Library installs**: `%pip install <pkg>` at notebook scope — does NOT persist across sessions. Reinstall at top of notebook each time, or pin versions in a setup cell.
-- **`dbutils.fs`**: some operations restricted on serverless. Prefer `spark.read.format(...).load(path)` and `spark.write.save(path)` over `dbutils.fs.cp` where possible.
-- **Cluster-level Spark conf**: don't use `spark.conf.set("spark.databricks...")` for cluster-wide settings — set at session scope instead.
-- **Auto Loader**: fully supported. `cloudFiles.schemaLocation` and `checkpointLocation` should point at `ext_checkpoints` paths.
-- **Structured Streaming**: supported with some restrictions vs classic. For Bronze append-only patterns it works cleanly.
-- **No autotermination setting** — serverless auto-releases after ~10 min idle.
-- **Per-second billing** — no cost when idle. Cheaper for dev/portfolio work than classic clusters.
+- **Library installs**: `%pip install <pkg>` at notebook scope — does NOT persist across sessions
+- **`dbutils.fs`**: some operations restricted on serverless. Prefer `spark.read.format(...).load(path)` and `spark.write.save(path)`
+- **Cluster-level Spark conf**: don't use `spark.conf.set("spark.databricks...")` for cluster-wide settings — set at session scope instead
+- **Auto Loader**: fully supported. `cloudFiles.schemaLocation` and `checkpointLocation` should point at `ext_checkpoints` paths
+- **Structured Streaming**: supported with some restrictions vs classic. For Bronze append-only patterns it works cleanly
+- **No autotermination setting** — serverless auto-releases after ~10 min idle
+- **Per-second billing** — no cost when idle. ~₹500/day = ~$6/day at active dev pace
 
----
+### 4.2 UC Serverless restrictions encountered (hit during Bronze build)
 
-## 5. Standard path references (for use in code)
+| Function / operation | Status on UC serverless | Use instead |
+|---|---|---|
+| `input_file_name()` | ❌ Blocked (`UC_COMMAND_NOT_SUPPORTED`) | `col("_metadata.file_path")` |
+| `display(pd.DataFrame(mixed_types))` | ❌ Arrow conversion fails on mixed-type columns | Cast columns to consistent type (`.astype(str)`) or use uniform types upstream |
+| `CLUSTER BY` on tables with deeply nested STRUCT columns | ❌ Stats schema doesn't cover cluster cols | Skip clustering at Bronze; design Silver/Gold schemas with cluster cols among the first 32, or set `delta.dataSkippingNumIndexedCols=64` |
+| RDD `.rdd.map(...)` patterns | ❌ Blocked | DataFrame transformations only |
+| `spark._jvm` / `_jsparkSession` JVM access | ❌ Blocked | Pure PySpark APIs |
+| `spark.sparkContext.setJobGroup(...)` | ⚠️ Restricted | Skip; rely on cell-level tagging in UI |
 
-```python
-# Top of every Databricks notebook
-RAW         = "abfss://raw@stretaildpsatyaki01.dfs.core.windows.net/"
-BRONZE      = "abfss://bronze@stretaildpsatyaki01.dfs.core.windows.net/"
-SILVER      = "abfss://silver@stretaildpsatyaki01.dfs.core.windows.net/"
-GOLD        = "abfss://gold@stretaildpsatyaki01.dfs.core.windows.net/"
-QUARANTINE  = "abfss://quarantine@stretaildpsatyaki01.dfs.core.windows.net/"
-CHECKPOINTS = "abfss://checkpoints@stretaildpsatyaki01.dfs.core.windows.net/"
-ARTIFACTS   = "abfss://artifacts@stretaildpsatyaki01.dfs.core.windows.net/"
-
-CATALOG     = "retaildp"
-```
-
-Per-source raw paths follow the patterns established by Modules 1 + 2:
-
-```
-RAW + "pos/store=<n>/date=<YYYY-MM-DD>/hour=<HH>/rtlog.ndjson"
-RAW + "marketplace/marketplace=<NAME>/date=<YYYY-MM-DD>/feed.ndjson"
-RAW + "olist/<file>.csv"
-RAW + "fx-rates/<file>.csv"
-RAW + "weather/<file>.csv"
-```
-
-Checkpoint paths follow the per-source pattern:
-
-```
-CHECKPOINTS + "<source>/schema/"     # cloudFiles.schemaLocation
-CHECKPOINTS + "<source>/state/"      # checkpointLocation
-```
-
----
-
-## 6. Updated convention — quarantine
-
-The original `CLAUDE.md` referenced `silver._quarantine` as the location for rejected rows.
-**This is superseded.** The new convention:
-
-- Rejected rows go to the top-level `retaildp.quarantine` schema
-- Table names are source-prefixed: `pos_rejects`, `silver_sa_tran_head_rejects`, etc.
-- Every quarantine table has a `rejection_reason STRING` column
-- Quarantine is its own container in ADLS (`quarantine/`) for separate lifecycle management
-
-Rationale: rejects originate from bronze ingestion as well as silver expectation failures,
-so burying quarantine inside `silver.*` doesn't fit cleanly.
-
----
-
-## 7. Phase A status
-
-✅ **Phase A closed (2026-05-20)** — smoke test write/read against `retaildp.bronze` succeeded; physical files confirmed in `bronze` container.
-
-Phase B Stage 6 (serverless compute) also verified — both SQL Warehouse and serverless notebook compute can read the raw container via UC.
-
-**Pending:** Stage 7 (Databricks Git folder ↔ GitHub), then Bronze notebooks.
+The `_metadata` struct is available on all file-source DataFrames (CSV, JSON, Parquet, Avro). Its fields:
