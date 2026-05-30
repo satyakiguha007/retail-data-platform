@@ -1,5 +1,15 @@
 [
   {
+    "timestamp": "2026-05-28T14:51:09.499480",
+    "source_id": "pos_rtlog",
+    "source_name": "POS RTLOGs",
+    "trigger": "adhoc",
+    "total": 171,
+    "uploaded": 171,
+    "failed": 0,
+    "elapsed_seconds": 28.69634222984314
+  },
+  {
     "timestamp": "2026-05-19T12:23:45.321450",
     "source_id": "olist",
     "source_name": "Olist E-commerce",

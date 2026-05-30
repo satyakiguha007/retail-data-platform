@@ -26,10 +26,11 @@ from .generator import TransactionGenerator
 from .writer import count_output, write_records
 
 
-def _parse_stores(stores_arg: str | None, n: int = 50) -> list[int]:
+def _parse_stores(stores_arg: str | None) -> list[int] | None:
+    """Return explicit IDs if given, else None so SimConfig loads stores.csv."""
     if stores_arg:
         return [int(s.strip()) for s in stores_arg.split(",")]
-    return list(range(1, n + 1))
+    return None
 
 
 def cmd_generate(args: argparse.Namespace) -> None:
@@ -40,16 +41,20 @@ def cmd_generate(args: argparse.Namespace) -> None:
         end = start + timedelta(days=args.days - 1)
 
     store_ids = _parse_stores(args.stores)
-    cfg = SimConfig(
-        store_ids=store_ids,
-        start_date=start,
-        end_date=end,
-        avg_trans_per_till_per_day=args.tpd,
-        fault_rate=args.fault_rate,
-        output_dir=args.output,
-        seed=args.seed,
-        tax_mode=args.tax_mode,
+    cfg_kwargs = dict(
+    start_date=start,
+    end_date=end,
+    avg_trans_per_till_per_day=args.tpd,
+    fault_rate=args.fault_rate,
+    output_dir=args.output,
+    seed=args.seed,
+    tax_mode=args.tax_mode,
     )
+
+    if store_ids is not None:
+      cfg_kwargs["store_ids"] = store_ids   # else SimConfig default reads stores.csv
+
+    cfg = SimConfig(**cfg_kwargs)
 
     import random
     rng = random.Random(cfg.seed)
