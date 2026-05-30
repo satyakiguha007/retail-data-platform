@@ -307,6 +307,17 @@ display(dbutils.fs.ls(SCHEMA_LOCATION))
 
 # COMMAND ----------
 
+print(CHECKPOINT_LOCATION)
+# also print the source path + schema location if they exist as variables
+try:
+    print(SOURCE_PATH)
+except: pass
+try:
+    print(SCHEMA_LOCATION)
+except: pass
+
+# COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Re-running this notebook
 # MAGIC
