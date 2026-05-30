@@ -93,3 +93,15 @@ See `docs/folder_structure.md` for full ADLS path layout.
 
 
 Checkpoint paths don't follow the table's catalog namespace. The bronze pos_rtlog checkpoint lives at checkpoints/pos_rtlog/{state,schema}/, not checkpoints/bronze/pos_rtlog/. Always print(CHECKPOINT_LOCATION) before clearing rather than assuming the path. And to reset a streaming source after a bulk data replace, clear the checkpoint — don't rely on Auto Loader to re-discover swapped files.
+
+
+## Silver layer conventions
+
+- Surrogate keys: `xxhash64(rtlog_orig_sys, tran_seq_no_natural, tran_datetime)` for tran_*;
+  `xxhash64(store, business_date)` for store_day. TRAN_DATETIME tie-breaker is required —
+  Module 1 fault injection makes both the natural composite and the source tran_seq_no
+  non-unique.
+- Quarantine schema: `retaildp.quarantine.silver_<table>_rejects` with `rejection_reason` ARRAY<STRING>.
+- Streaming sources: `readStream + availableNow + foreachBatch` for POS/MKT; batch for static dims.
+- Never TRUNCATE a Delta table that has a streaming reader — DROP + recreate instead.
+- Bronze pos_rtlog checkpoint lives at `checkpoints/pos_rtlog/{state,schema}/` (no `bronze/` prefix).
