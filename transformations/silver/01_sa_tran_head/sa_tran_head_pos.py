@@ -1,13 +1,13 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # Silver — `sa_tran_head` (Pass 1 — POS only)
+# MAGIC # Silver — `sa_tran_head` (POS)
 # MAGIC
 # MAGIC The central transactional table. One row per transaction, conformed to the
 # MAGIC ReSA-canonical `SA_TRAN_HEAD` schema. Every `sa_tran_*` child table joins back here.
 # MAGIC
 # MAGIC | Item | Value |
 # MAGIC |---|---|
-# MAGIC | **Source** | `retaildp.bronze.pos_rtlog` (Pass-1 scope) |
+# MAGIC | **Source** | `retaildp.bronze.pos_rtlog` |
 # MAGIC | **Target** | `retaildp.silver.sa_tran_head` |
 # MAGIC | **Quarantine** | `retaildp.quarantine.silver_sa_tran_head_rejects` |
 # MAGIC | **FK lookups** | `silver.sa_store_day`, `silver.sa_store_data`, `bronze.fx_rates` |
@@ -15,7 +15,16 @@
 # MAGIC | **Idempotent** | Yes — deterministic `TRAN_SEQ_NO` + MERGE |
 # MAGIC | **Partitioned by** | `BUSINESS_DATE` |
 # MAGIC
-# MAGIC ## Five new patterns introduced here
+# MAGIC ## Shared helpers used (see `_shared/`)
+# MAGIC - `surrogate_keys.tran_seq_no_expr()` — canonical `TRAN_SEQ_NO` hash (cell 6 step 2)
+# MAGIC - `quarantine.merge_and_quarantine()` — idempotent MERGE + quarantine append (cell 6 step 7)
+# MAGIC
+# MAGIC *Note:* `fx_helpers.enrich_with_parent_fx` is NOT used here — `01` is the parent. It derives
+# MAGIC `FX_RATE` from `bronze.fx_rates` directly (step 4), which is the foundational FX lookup that
+# MAGIC all child tables then inherit. `schema_gate` is not needed either — `tran_head` is a non-array
+# MAGIC struct present on every bronze row.
+# MAGIC
+# MAGIC ## Five new patterns introduced here (the foundation for the rest of silver)
 # MAGIC 1. **Surrogate from source ID + datetime tie-breaker** — `TRAN_SEQ_NO = xxhash64(rtlog_orig_sys, tran_seq_no_natural, tran_datetime)`. Module 1's fault injection makes both the natural composite `(store, date, register, tran_no)` AND the simulator's own `tran_seq_no` non-unique (the injector regenerates / clones records). `tran_datetime` is the reliable tie-breaker — two real events can't share a till at the same microsecond.
 # MAGIC 2. **Multiple FK joins** — `sa_store_day` (store-day spine), `sa_store_data` (currency, country)
 # MAGIC 3. **FX normalisation** — broadcast join `bronze.fx_rates` on `(business_date, currency)` → `VALUE_USD`
@@ -44,16 +53,28 @@
 from pyspark.sql import DataFrame
 from pyspark.sql.functions import (
     col, current_timestamp, lit, when, broadcast,
-    array, array_compact, xxhash64,
+    array, array_compact,
 )
 from pyspark.sql.types import (
     StructType, StructField, LongType, IntegerType, StringType,
     DateType, TimestampType, DecimalType, ArrayType,
 )
-from delta.tables import DeltaTable
 
 dbutils.widgets.text("source_table", "retaildp.bronze.pos_rtlog", "Source Bronze Table")
 SOURCE_TABLE = dbutils.widgets.get("source_table")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Shared helpers
+
+# COMMAND ----------
+
+# MAGIC %run ../_shared/surrogate_keys
+
+# COMMAND ----------
+
+# MAGIC %run ../_shared/quarantine
 
 # COMMAND ----------
 
@@ -175,12 +196,12 @@ else:
 # MAGIC
 # MAGIC Per micro-batch:
 # MAGIC 1. **Flatten** — pull tran_head struct fields + top-level columns into a flat shape with explicit aliases.
-# MAGIC 2. **Surrogate key** — `TRAN_SEQ_NO = xxhash64(rtlog_orig_sys, tran_seq_no_natural, tran_datetime)`. Hashes the source ID + datetime tie-breaker (both natural composite and source ID alone are non-unique under fault injection).
-# MAGIC 3. **FK enrich** — broadcast joins to `sa_store_data` (currency, country) and `sa_store_day` (store-day spine).
-# MAGIC 4. **FX enrich** — broadcast join to `bronze.fx_rates` on (business_date, currency) → `FX_RATE`.
+# MAGIC 2. **Surrogate key** — `tran_seq_no_expr()` from `_shared/surrogate_keys`. Same hash across every silver notebook.
+# MAGIC 3. **FK enrich** — broadcast joins to `sa_store_data` (currency, country) and `sa_store_day` (store-day spine). Inline (these are dimension lookups, not the parent-FX pattern).
+# MAGIC 4. **FX enrich** — broadcast join to `bronze.fx_rates` on `(business_date, currency)` → `FX_RATE`. Inline (this is where FX FIRST enters silver — children then inherit from sa_tran_head).
 # MAGIC 5. **Derive** — `TAX_MODE` from country, `VALUE_USD = VALUE * FX_RATE`.
 # MAGIC 6. **DQ split** — clean vs reject with `rejection_reason` array.
-# MAGIC 7. **MERGE** clean into target on `TRAN_SEQ_NO`. **Append** rejects to quarantine.
+# MAGIC 7. **Write** — `merge_and_quarantine()` from `_shared/quarantine`. Idempotent MERGE on `TRAN_SEQ_NO` + append to quarantine.
 
 # COMMAND ----------
 
@@ -227,19 +248,8 @@ def merge_microbatch(microBatchDF: DataFrame, batch_id: int) -> None:
         )
     )
 
-    # 2. Surrogate key — hash source-unique ID + datetime tie-breaker.
-    # Even the simulator's tran_seq_no is non-unique under fault injection (the injector
-    # appears to regenerate it when duplicating tran_no, OR clones whole records).
-    # Adding TRAN_DATETIME makes the surrogate truly unique — two real transactions
-    # cannot occur on the same till at the same microsecond.
-    keyed = flat.withColumn(
-        "TRAN_SEQ_NO",
-        xxhash64(
-            col("RTLOG_ORIG_SYS"),
-            col("TRAN_SEQ_NO_NATURAL"),
-            col("TRAN_DATETIME"),
-        ),
-    )
+    # 2. Surrogate key — shared helper. Same hash across every silver notebook.
+    keyed = flat.withColumn("TRAN_SEQ_NO", tran_seq_no_expr())
 
     # 3a. Enrich with sa_store_data → CURRENCY_CODE, COUNTRY
     store_data = (
@@ -334,33 +344,22 @@ def merge_microbatch(microBatchDF: DataFrame, batch_id: int) -> None:
     )
 
     clean   = dq.filter("size(rejection_reason) = 0").drop("rejection_reason")
-    rejects = dq.filter("size(rejection_reason) > 0").withColumn(
-        "_quarantine_ts", current_timestamp()
-    )
+    rejects = dq.filter("size(rejection_reason) > 0")
+    # _quarantine_ts added by merge_and_quarantine
 
     # Project clean to exact target schema order
     clean = clean.select(*[f.name for f in sa_tran_head_schema.fields])
 
-    # 7a. MERGE clean into target on TRAN_SEQ_NO
-    target = DeltaTable.forName(spark, TARGET_TABLE)
-    (
-        target.alias("t")
-        .merge(clean.alias("s"), "t.TRAN_SEQ_NO = s.TRAN_SEQ_NO")
-        .whenMatchedUpdateAll()
-        .whenNotMatchedInsertAll()
-        .execute()
+    # 7. MERGE clean + append rejects — shared helper
+    clean_n, reject_n = merge_and_quarantine(
+        clean_df=clean,
+        rejects_df=rejects,
+        target_table=TARGET_TABLE,
+        quarantine_table=QUARANTINE_TABLE,
+        merge_keys=["TRAN_SEQ_NO"],
     )
 
-    # 7b. Append rejects to quarantine
-    reject_n = rejects.count()
-    if reject_n > 0:
-        if not spark.catalog.tableExists(QUARANTINE_TABLE):
-            print(f"Creating {QUARANTINE_TABLE}.")
-            rejects.write.format("delta").saveAsTable(QUARANTINE_TABLE)
-        else:
-            rejects.write.format("delta").mode("append").saveAsTable(QUARANTINE_TABLE)
-
-    print(f"Batch {batch_id}: clean={clean.count()} rejects={reject_n}")
+    print(f"Batch {batch_id}: clean={clean_n} rejects={reject_n}")
 
 # COMMAND ----------
 

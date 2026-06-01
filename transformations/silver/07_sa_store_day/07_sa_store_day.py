@@ -331,3 +331,4 @@ try:
         .select("STORE", "BUSINESS_DATE", "rejection_reason").show(10, truncate=False)
 except Exception as e:
     print(f"No quarantine table: {e}")
+
