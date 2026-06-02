@@ -33,7 +33,7 @@
 # MAGIC
 # MAGIC ## DQ rules (failures routed to quarantine)
 # MAGIC 1. `TRAN_DATETIME` parses to a valid timestamp
-# MAGIC 2. `TRAN_TYPE` in {SALE, RETURN, PVOID, PAIDIN, PAIDOUT, NOSALE, OPEN, CLOSE}
+# MAGIC 2. `TRAN_TYPE` in {SALE, RETURN, PVOID, PAIDIN, PAIDOUT, NOSALE, OPEN, CLOSE,CREFUND}
 # MAGIC 3. `VALUE` is NOT NULL (zero is fine — OPEN/CLOSE/NOSALE legitimately have value=0)
 # MAGIC 4. `STORE_DAY_SEQ_NO` FK lookup succeeds against `sa_store_day`
 # MAGIC 5. `CURRENCY_CODE` FK lookup succeeds against `sa_store_data`

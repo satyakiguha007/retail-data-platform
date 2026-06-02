@@ -145,6 +145,13 @@ sa_tran_item_schema = StructType([
     StructField("RETURN_REASON_CODE",   StringType(),      nullable=True),
     StructField("CUST_ORDER_NO",        StringType(),      nullable=True),
 
+    # ReSA generic reference numbers (item-level, char(30) per spec — used per-channel)
+    StructField("REF_NO5",              StringType(),      nullable=True),
+    StructField("REF_NO6",              StringType(),      nullable=True),
+    StructField("REF_NO7",              StringType(),      nullable=True),
+    StructField("REF_NO8",              StringType(),      nullable=True),
+
+
     # Flags
     StructField("ERROR_IND",            StringType(),      nullable=True),
 
@@ -262,6 +269,11 @@ def merge_microbatch(microBatchDF: DataFrame, batch_id: int) -> None:
                     (col("ORIG_UNIT_RETAIL") * col("FX_RATE")).cast(DecimalType(20, 4)))
         .withColumn("TOTAL_IGTAX_AMT_USD",
                     (col("TOTAL_IGTAX_AMT") * col("FX_RATE")).cast(DecimalType(20, 4)))
+         # ReSA REF_NO5-8 — not populated by POS bronze; explicit NULLs so projection succeeds
+        .withColumn("REF_NO5",     lit(None).cast(StringType()))
+        .withColumn("REF_NO6",     lit(None).cast(StringType()))
+        .withColumn("REF_NO7",     lit(None).cast(StringType()))
+        .withColumn("REF_NO8",     lit(None).cast(StringType()))
         .withColumn("_silver_ts", current_timestamp())
         .withColumn("_source",    lit(SOURCE_TABLE))
     )
