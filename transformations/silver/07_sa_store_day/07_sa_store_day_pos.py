@@ -317,18 +317,13 @@ display(
 
 # COMMAND ----------
 
-print("=== Distinct stores in bronze.pos_rtlog ===")
-spark.table("retaildp.bronze.pos_rtlog").select("store").distinct().orderBy("store").show(30)
-
-print("=== Stores in silver.sa_store_data ===")
-spark.table("retaildp.silver.sa_store_data").select("STORE").orderBy("STORE").show(30)
-
 print("=== Quarantine count ===")
-try:
+if spark.catalog.tableExists("retaildp.quarantine.silver_sa_store_day_rejects"):
     n = spark.table("retaildp.quarantine.silver_sa_store_day_rejects").count()
     print(f"sa_store_day_rejects: {n} rows")
-    spark.table("retaildp.quarantine.silver_sa_store_day_rejects") \
-        .select("STORE", "BUSINESS_DATE", "rejection_reason").show(10, truncate=False)
-except Exception as e:
-    print(f"No quarantine table: {e}")
-
+    if n > 0:
+        spark.table("retaildp.quarantine.silver_sa_store_day_rejects") \
+            .select("STORE", "BUSINESS_DATE", "rejection_reason") \
+            .show(10, truncate=False)
+else:
+    print("sa_store_day_rejects: table does not exist (no DQ failures yet — expected for clean POS data)")

@@ -11,7 +11,7 @@
 # MAGIC | **Quarantine** | `retaildp.quarantine.silver_sa_store_data_rejects` |
 # MAGIC | **Pattern** | Batch read + MERGE upsert |
 # MAGIC | **Idempotent** | Yes — MERGE on natural key `STORE` |
-# MAGIC | **Streaming** | No — reference dimension, ~26 rows |
+# MAGIC | **Streaming** | No — reference dimension, ~27 rows (26 physical + 1 OLIST_BR virtual) |
 # MAGIC
 # MAGIC ## Source → Silver mapping
 # MAGIC
@@ -20,7 +20,7 @@
 # MAGIC | `store_no` | `STORE` | cast → `BIGINT` |
 # MAGIC | `store_name` | `STORE_NAME` | trim |
 # MAGIC | `tills` | `REGISTER_COUNT` | cast → `INT` (ReSA uses "REGISTER", synonym for "till") |
-# MAGIC | `country` | `COUNTRY` | map long-form → ISO3 (India→IND, USA→USA, UK→GBR, UAE→ARE, Singapore→SGP) |
+# MAGIC | `country` | `COUNTRY` | map long-form → ISO3 (India→IND, USA→USA, UK→GBR, UAE→ARE, Singapore→SGP, BRA→BRA passthrough) |
 # MAGIC | `local_currency` | `CURRENCY_CODE` | uppercase + trim |
 # MAGIC | `exchange_rate_to_usd` | — | **dropped** — `bronze.fx_rates` is the source of truth for FX |
 # MAGIC
@@ -29,7 +29,12 @@
 # MAGIC 2. `STORE_NAME` NOT NULL and non-empty after trim
 # MAGIC 3. `REGISTER_COUNT` NOT NULL and > 0
 # MAGIC 4. `COUNTRY` resolved to a valid ISO3 code (unmapped country → null → reject)
-# MAGIC 5. `CURRENCY_CODE` in `{INR, USD, GBP, AED, SGD}`
+# MAGIC 5. `CURRENCY_CODE` in `{INR, USD, GBP, AED, SGD, BRL}`
+# MAGIC
+# MAGIC ## Pass-3 note (BRA / BRL added)
+# MAGIC `STORE=99999 (OLIST_BR, BRA, BRL)` is the virtual store for the Brazilian e-commerce
+# MAGIC (Olist) channel. The CSV row uses `BRA` directly (already ISO3, like USA), so the
+# MAGIC country mapping has a passthrough branch mirroring the USA branch.
 
 # COMMAND ----------
 
@@ -64,8 +69,9 @@ TARGET_TABLE     = "retaildp.silver.sa_store_data"
 QUARANTINE_TABLE = "retaildp.quarantine.silver_sa_store_data_rejects"
 
 # DQ reference sets
-VALID_CURRENCIES = {"INR", "USD", "GBP", "AED", "SGD"}
-VALID_COUNTRIES  = {"IND", "USA", "GBR", "ARE", "SGP"}
+# Pass-3: BRL / BRA added for the Olist virtual store (STORE=99999 OLIST_BR).
+VALID_CURRENCIES = {"INR", "USD", "GBP", "AED", "SGD", "BRL"}
+VALID_COUNTRIES  = {"IND", "USA", "GBR", "ARE", "SGP", "BRA"}
 
 # COMMAND ----------
 
@@ -133,13 +139,16 @@ conformed_df = (
     .withColumnRenamed("country",        "_country_src")
 
     # Map country long-form → ISO3. Unknown values become NULL and will fail DQ.
+    # Mixed convention: most countries are long-form ("India", "UK", "UAE", "Singapore"),
+    # but USA and BRA come through as ISO3 already — passthrough branches handle both.
     .withColumn(
         "COUNTRY",
-        when(col("_country_src") == "India",     lit("IND"))
-        .when(col("_country_src") == "USA",      lit("USA"))
-        .when(col("_country_src") == "UK",       lit("GBR"))
-        .when(col("_country_src") == "UAE",      lit("ARE"))
+        when(col("_country_src") == "India",      lit("IND"))
+        .when(col("_country_src") == "USA",       lit("USA"))
+        .when(col("_country_src") == "UK",        lit("GBR"))
+        .when(col("_country_src") == "UAE",       lit("ARE"))
         .when(col("_country_src") == "Singapore", lit("SGP"))
+        .when(col("_country_src") == "BRA",       lit("BRA"))   # Pass-3: Olist virtual store
         .otherwise(lit(None).cast(StringType())),
     )
 
@@ -268,11 +277,11 @@ else:
 # MAGIC %md
 # MAGIC ## Validation
 # MAGIC
-# MAGIC Row count, PK-uniqueness assertion, sample display.
+# MAGIC Row count, PK-uniqueness assertion, OLIST_BR specific check, sample display.
 
 # COMMAND ----------
 
-# 1. Row count — should be 26 on first clean run
+# 1. Row count — should be 27 on first clean run (26 physical + OLIST_BR)
 silver_count = spark.table(TARGET_TABLE).count()
 print(f"silver.sa_store_data row count: {silver_count}")
 
@@ -287,5 +296,16 @@ dup_count = (
 assert dup_count == 0, f"PK violation: {dup_count} duplicate STORE values"
 print("PK uniqueness check passed (0 duplicates)")
 
-# 3. Sample
-display(spark.table(TARGET_TABLE).orderBy("STORE").limit(10))
+# 3. Pass-3 sanity — OLIST_BR row landed in clean silver, not quarantine
+olist_row = (
+    spark.table(TARGET_TABLE)
+    .where(col("STORE") == 99999)
+    .collect()
+)
+if olist_row:
+    print(f"OLIST_BR check passed: {olist_row[0].asDict()}")
+else:
+    print("WARNING: STORE=99999 not in silver.sa_store_data — check quarantine table for rejection_reason.")
+
+# 4. Sample
+display(spark.table(TARGET_TABLE).orderBy("STORE").limit(30))
