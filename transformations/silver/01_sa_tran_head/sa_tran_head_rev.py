@@ -198,9 +198,23 @@ def write_rev_batch(microBatchDF: DataFrame, batch_id: int) -> None:
 # MAGIC ## Step 5 — run the CDF stream
 # MAGIC
 # MAGIC `readChangeFeed=true` flips the DataFrame read from "current state" to "change
-# MAGIC stream". `startingVersion=0` means: from the earliest CDF-enabled commit. The
-# MAGIC checkpoint at `CHECKPOINT_PATH` tracks where we left off, so reruns only pick
-# MAGIC up new commits.
+# MAGIC stream". We deliberately **do NOT** pass `startingVersion` — the parent table
+# MAGIC has Delta versions that pre-date CDF enablement (POS Pass-1, MKT Pass-2, Olist
+# MAGIC Pass-3 each added commits before this notebook ever ran). Asking for those
+# MAGIC versions raises `DELTA_MISSING_CHANGE_DATA` because CDF wasn't recording them.
+# MAGIC
+# MAGIC Without `startingVersion`, the stream starts from the **current** version. The
+# MAGIC checkpoint at `CHECKPOINT_PATH` tracks where we left off, so subsequent reruns
+# MAGIC only pick up new commits — which is exactly the audit-trail-from-now-forward
+# MAGIC semantics ReSA's `_REV` provides.
+
+# COMMAND ----------
+
+# DIAGNOSTIC — see when CDF was first enabled on the parent.
+# Look for the most recent SET TBLPROPERTIES with delta.enableChangeDataFeed=true;
+# the `version` column on that row is the floor of CDF data availability.
+print("=== Parent table history (last 5 commits) ===")
+spark.sql(f"DESCRIBE HISTORY {PARENT_TABLE} LIMIT 5").show(truncate=False)
 
 # COMMAND ----------
 
@@ -210,7 +224,7 @@ print(f"Stream checkpoint: {CHECKPOINT_PATH}")
     spark.readStream
     .format("delta")
     .option("readChangeFeed", "true")
-    .option("startingVersion", 0)
+    # No startingVersion — stream from current version forward
     .table(PARENT_TABLE)
     .writeStream
     .foreachBatch(write_rev_batch)
@@ -282,24 +296,24 @@ else:
 # COMMAND ----------
 
 # # --- UNCOMMENT TO RUN ---
-# sample_row = (
-#     spark.table(PARENT_TABLE)
-#     .where(col("RTLOG_ORIG_SYS") == "POS")
-#     .select("TRAN_SEQ_NO", "ERROR_IND")
-#     .limit(1)
-#     .collect()
+#sample_row = (
+#    spark.table(PARENT_TABLE)
+#    .where(col("RTLOG_ORIG_SYS") == "POS")
+#    .select("TRAN_SEQ_NO", "ERROR_IND")
+##     .limit(1)
+ #    .collect()
 # )
-# if sample_row:
-#     test_seq = sample_row[0].TRAN_SEQ_NO
-#     orig_err = sample_row[0].ERROR_IND
-#     print(f"Updating TRAN_SEQ_NO={test_seq} ERROR_IND: {orig_err!r} -> 'A'")
-#     spark.sql(f"""
-#         UPDATE {PARENT_TABLE}
-#         SET ERROR_IND = 'A'
-#         WHERE TRAN_SEQ_NO = {test_seq}
-#     """)
-#     print("UPDATE committed. Re-run the stream cell + validation block above.")
-#     print(f"Expected: 1 new _REV row with _change_type='update_preimage', "
-#           f"TRAN_SEQ_NO={test_seq}, ERROR_IND={orig_err!r}")
-# else:
-#     print("No POS rows available — load some data first.")
+#if sample_row:
+#    test_seq = sample_row[0].TRAN_SEQ_NO
+#   orig_err = sample_row[0].ERROR_IND
+#    print(f"Updating TRAN_SEQ_NO={test_seq} ERROR_IND: {orig_err!r} -> 'A'")
+#    spark.sql(f"""
+ #       UPDATE {PARENT_TABLE}
+#        SET ERROR_IND = 'A'
+ #       WHERE TRAN_SEQ_NO = {test_seq}
+#    """)
+#    print("UPDATE committed. Re-run the stream cell + validation block above.")
+#    print(f"Expected: 1 new _REV row with _change_type='update_preimage', "
+##          f"TRAN_SEQ_NO={test_seq}, ERROR_IND={orig_err!r}")
+#else:
+#    print("No POS rows available — load #some data first.")
