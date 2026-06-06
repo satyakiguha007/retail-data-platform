@@ -1,143 +1,196 @@
-# Progress
+# Project progress
 
-A running ledger of what's done, what's in flight, and what's next.
+Pass-by-pass tracker. Updated at the end of each work session.
 
-## Pass-1 — POS (COMPLETE)
-
-POS RTLOG ingested via Module 1 simulator. Three IND stores (33487, 39876, 41203),
-three business days, full RTLOG payload exercised.
-
-### Module 1 — POS simulator and bronze ingestion (done)
-- Module 1 simulator emits RTLOG-style JSON with fault injection (duplicate
-  `tran_seq_no`, duplicate `tran_no`, NULL injection, error_ind toggling)
-- Bronze tables: `bronze.pos_rtlog`, `bronze.stores`, `bronze.fx_rates`,
-  `bronze.weather`, `bronze.olist_orders` (loaded but not yet transformed)
-- Auto Loader handles schema inference + checkpoint state
-
-### Module 2 — Bronze layer (done)
-- All bronze tables in Unity Catalog `retaildp.bronze.*`
-- `_source_file` lineage column on every bronze row
-- Partitioning by ingestion date where applicable
-
-### Module 3 — Silver layer (DONE for POS)
-
-| # | Notebook | Target | Row count | Validation |
-|---|---|---|---:|---|
-| 08 | `08_sa_store_data.py` | `silver.sa_store_data` | 26 | clean |
-| 07 | `07_sa_store_day.py` | `silver.sa_store_day` | 9 | clean |
-| 01 | `01_sa_tran_head/sa_tran_head_pos.py` | `silver.sa_tran_head` | 8,268 | PK ✓ FK ✓ |
-| 02 | `02_sa_tran_item/sa_tran_item_pos.py` | `silver.sa_tran_item` | 22,649 | PK ✓ FK ✓ |
-| 03 | `03_sa_tran_disc/sa_tran_disc_pos.py` | `silver.sa_tran_disc` | 5,094 | PK ✓ FK ✓ |
-| 04 | `04_sa_tran_tender/sa_tran_tender_pos.py` | `silver.sa_tran_tender` | confirmed | PK ✓ FK ✓ |
-| 05 | `05_sa_tran_tax/sa_tran_tax_pos.py` | `silver.sa_tran_tax` | 0 (IND-only) | gate skips correctly |
-| 06 | `06_sa_tran_igtax/sa_tran_igtax_pos.py` | `silver.sa_tran_igtax` | confirmed | recon ✓ |
-
-**Patterns established**:
-- `xxhash64`-based deterministic surrogate keys with `TRAN_DATETIME` tie-breaker
-- `readStream` + `availableNow` + `foreachBatch` → MERGE (idempotent)
-- Quarantine-first DQ — `rejection_reason` arrays, never silent drops
-- FK inheritance — children inherit `CURRENCY_CODE` + `FX_RATE` from parent
-- Schema gate — defensive check on Auto Loader empty-array inference
-- Cross-table reconciliation (06 ↔ 02 on `TOTAL_IGTAX_AMT`)
-
-### `_shared/` helper extraction (done)
-
-After all six POS notebooks were working, extracted four shared modules:
-
-```
-_shared/
-├── surrogate_keys.py    tran_seq_no_expr()
-├── fx_helpers.py        enrich_with_parent_fx(df, parent_table, join_keys)
-├── quarantine.py        merge_and_quarantine(clean_df, rejects_df, target, quarantine, merge_keys)
-└── schema_gate.py       bronze_array_has_inner_fields(source_table, array_column)
-```
-
-All six POS notebooks refactored to use these helpers. Pass-1 row counts
-re-confirmed after refactor — identical. No semantic drift.
+**Last updated**: 2026-06-06
 
 ---
 
-## Pass-2 — Marketplace (NEXT)
+## Module status at a glance
 
-E-commerce marketplace data (Amazon Seller-style or custom generator).
-Different bronze shape, same silver targets, distinguished by `RTLOG_ORIG_SYS='MKT'`.
-
-### Build order (planned)
-1. `01_sa_tran_head/marketplace.py` — order header
-2. `02_sa_tran_item/marketplace.py` — order line items
-3. `04_sa_tran_tender/marketplace.py` — payment methods
-4. `06_sa_tran_igtax/marketplace.py` — VAT items (if marketplace serves VAT regions)
-5. `03_sa_tran_disc/marketplace.py` — promotions (if marketplace emits them)
-6. `05_sa_tran_tax/marketplace.py` — US-style sales tax (likely populates here for US orders)
-
-### What's expected to be new
-- Cross-border tenders — `ORIG_CURRENCY ≠ CURRENCY_CODE` finally exercised
-- More USA / GBR data — `sa_tran_tax` finally populated
-- Order-level discounts vs line-level discounts — may need PK refinement
-- Customer dimension — new dim table likely needed (`sa_customer`?)
-
-### Open design questions
-- Will marketplace orders share `bronze.fx_rates` with POS, or have their own rate table?
-- How do marketplace order statuses (PENDING / SHIPPED / DELIVERED / CANCELLED)
-  map to ReSA `TRAN_TYPE`?
-- Does each order produce a single ReSA transaction at order time, or one per shipment?
+| # | Module | Folder | Status |
+|---|---|---|---|
+| 1 | POS RTLOG Simulator | `pos_simulator/` | ✅ Complete |
+| 2 | Batch sources + additional channels | `ingestion/` | ✅ Complete |
+| 2b | ADLS Sync Console | `adls_sync_console/` | ✅ Complete |
+| 3 | Medallion lakehouse (Bronze + Silver) | `transformations/` | ✅ Complete |
+| 4 | Sales Audit layer (18 rules → sa_error) | `transformations/silver/audit/` | ✅ **Complete (this session)** |
+| 5 | LLM Intelligence Layer | `llm/` | ⏳ Not started |
+| 6 | Serving & Visualisation (Power BI / Synapse) | `serving/` | ⏳ Not started |
 
 ---
 
-## Pass-3 — Olist (AFTER PASS-2)
+## Module 3 — Silver layer (medallion conformance)
 
-Brazilian e-commerce Kaggle dataset (`olist_orders_dataset`, etc.). Narrower
-coverage than marketplace.
+### Pass-1 — POS only ✅ COMPLETE
 
-### Coverage (planned)
-- `01_sa_tran_head/olist.py` — `olist_orders_dataset` → tran_head
-- `02_sa_tran_item/olist.py` — `olist_order_items_dataset` → tran_item
-- `04_sa_tran_tender/olist.py` — `olist_order_payments_dataset` → tran_tender
+| Notebook | Target | Row count | Status |
+|---|---|---|---|
+| `08_sa_store_data.py` | `silver.sa_store_data` | 27 | ✅ |
+| `07_sa_store_day/sa_store_day.py` | `silver.sa_store_day` (POS rows) | 9 | ✅ |
+| `01_sa_tran_head/sa_tran_head_pos.py` | `silver.sa_tran_head` (POS) | 8,268 | ✅ |
+| `02_sa_tran_item/sa_tran_item_pos.py` | `silver.sa_tran_item` (POS) | 22,649 | ✅ |
+| `03_sa_tran_disc/sa_tran_disc_pos.py` | `silver.sa_tran_disc` (POS) | 5,094 | ✅ |
+| `04_sa_tran_tender/sa_tran_tender_pos.py` | `silver.sa_tran_tender` (POS) | confirmed | ✅ |
+| `05_sa_tran_tax/sa_tran_tax_pos.py` | `silver.sa_tran_tax` (POS) | 0 (IND-only, schema gate skips) | ✅ |
+| `06_sa_tran_igtax/sa_tran_igtax_pos.py` | `silver.sa_tran_igtax` (POS) | confirmed | ✅ |
 
-### Skipped (Olist doesn't carry this data)
-- `03_sa_tran_disc` — no per-line discount entity in Olist
-- `05_sa_tran_tax`, `06_sa_tran_igtax` — Brazilian taxes typically baked into
-  price; not broken out per line in the dataset
+### Pass-2 — Marketplace ✅ COMPLETE
 
-### What's expected to be new
-- BRL (Brazilian Real) currency — new entry in `fx_rates`
-- Multi-table source — Olist is a relational dataset (~7 CSVs that join),
-  not a single JSON stream. Bronze ingestion will look different.
-- Customer + seller dimensions — Olist has both, opens the door to a more
-  complete `sa_customer` / `sa_supplier` story
+| Notebook | Target | Notes |
+|---|---|---|
+| `01_sa_tran_head/sa_tran_head_marketplace.py` | `silver.sa_tran_head` (MKT) | Single-row pattern, REGISTER='ECOM' sentinel |
+| `02_sa_tran_item/sa_tran_item_marketplace.py` | `silver.sa_tran_item` (MKT) | Explode items + REF_NO5-8 |
+| `03_sa_tran_disc/sa_tran_disc_marketplace.py` | `silver.sa_tran_disc` (MKT) | 40% discount synthesised |
+| `04_sa_tran_tender/sa_tran_tender_marketplace.py` | `silver.sa_tran_tender` (MKT) | One synthesised tender row per order, TENDER_TYPE_GROUP='MARKETPLACE' |
+| `07_sa_store_day/sa_store_day_marketplace.py` | `silver.sa_store_day` (MKT rows) | Insert-if-not-exists MERGE |
+
+Total marketplace transactions: 26,650 orders, 21,260 discount rows.
+
+### Pass-3 — Olist ✅ COMPLETE
+
+| Notebook | Target | Notes |
+|---|---|---|
+| `09_sa_seller_data/sa_seller_data_olist.py` | `silver.sa_seller_data` | New peer dim — 3,095 Olist sellers |
+| `07_sa_store_day/sa_store_day_olist.py` | `silver.sa_store_day` (OMS rows) | Virtual STORE=99999 OLIST_BR, BRA, BRL |
+| `01_sa_tran_head/sa_tran_head_olist.py` | `silver.sa_tran_head` (OMS) | First JOIN-aggregate head, VENDOR_NO = primary seller |
+| `02_sa_tran_item/sa_tran_item_olist.py` | `silver.sa_tran_item` (OMS) | Flat-source items + synthetic freight line |
+| `04_sa_tran_tender/sa_tran_tender_olist.py` | `silver.sa_tran_tender` (OMS) | 1:N installment fan-out from olist_order_payments |
+
+Total Olist transactions: ~99k orders. No `sa_tran_disc` (no discount source in Olist data). No tax tables for OMS.
+
+### CDF demo — `sa_tran_head_rev` ✅ COMPLETE
+
+| Notebook | Target | Notes |
+|---|---|---|
+| `01_sa_tran_head/sa_tran_head_rev.py` | `silver.sa_tran_head_rev` | Delta Change Data Feed capture — `update_preimage` + `delete`. Audit trail sibling. |
+
+ALTER TABLE enables CDF on `sa_tran_head` (idempotent). Streaming `readChangeFeed + availableNow + foreachBatch` appends to `_REV`. Schema = parent fields + `_change_type` + `_commit_version` + `_commit_timestamp` + `_rev_capture_ts`.
+
+### Silver totals — all 3 channels
+
+| Table | POS | MKT | OMS | Total |
+|---|---|---|---|---|
+| `sa_tran_head` | 8,268 | 26,650 | ~99k | **~133,584** |
+| `sa_tran_item` | 22,649 | confirmed | confirmed (incl. freight lines) | sizeable |
+| `sa_tran_disc` | 5,094 | 21,260 | 0 | 26,354 |
+| `sa_tran_tender` | confirmed | 26,650 | confirmed (installment fan-out) | sizeable |
+| `sa_tran_tax` | 0 | n/a | n/a | 0 |
+| `sa_tran_igtax` | confirmed | n/a | n/a | sizeable |
+| `sa_store_day` | 9 | added | added | combined |
+| `sa_store_data` | 27 | — | — | 27 |
+| `sa_seller_data` | — | — | 3,095 | 3,095 |
 
 ---
 
-## Module 4 — Audit & reconciliation (AFTER PASS-3)
+## Module 4 — Sales Audit layer ✅ COMPLETE (this session)
 
-- `sa_error` ingestion from rows flagged `ERROR_IND='Y'` across silver
-- Reconciliation reports (header VALUE_USD vs sum of item UNIT_RETAIL_USD * QTY, etc.)
-- Tender balancing (sum of tenders vs header VALUE)
-- Tax reconciliation (covered partially by 06's existing recon)
+Full framework + 18 rules + orchestrator deployed under
+`transformations/silver/audit/`. See `docs/audit-layer.md` for the deep dive.
+
+### Foundation
+
+| File | Role |
+|---|---|
+| `_shared/sa_error_schema.py` | `sa_error_schema` (14 cols) + `narrow_finding_schema` (8 cols) |
+| `_shared/rule_framework.py` | `Severity` constants + `emit_findings()` + `write_findings()` |
+| `sa_error_writer.py` | Orchestrator — runs all 18 rules with shared `audit_run_id` |
+
+### Rules deployed
+
+All 18 rules in `rules/`. Categorised:
+
+| Category | Rules | Severity | Status |
+|---|---|---|---|
+| Reconciliation | R01, R02, R03, R04 | F/M/W mix | ✅ deployed |
+| Sign / range | R05, R06, R07 | F/M | ✅ deployed + R06 patched (POS-scope) |
+| Mandatory fields | R08, R09, R10 | F/M | ✅ deployed + R10 patched (+MARKETPLACE) |
+| FK integrity | R11, R12, R13 | F | ✅ deployed |
+| Reasonability | R14, R15, R16 | W | ✅ deployed + R15 patched (5+ lines) |
+| Temporal / dimensional | R17, R18 | F/M | ✅ deployed + R17 patched (channel-aware) |
+
+### Audit findings (real signal)
+
+| Rule | Findings | Story |
+|---|---|---|
+| R02 | 552 | RETURN head=0 convention + PVOID + fault injection |
+| R03 | 273 | OMS=255 (Olist payment drift), POS=18 |
+| R05 | 25 | POS SALE with negative QTY — simulator fault injection |
+| R14 | 2,186 | Statistical outliers — OMS large orders, MKT high-value, POS edge cases |
+| **Others** | 0 or small | DQ-asserted (R08-R13, R18) or patched out (R06, R10, R15, R17) |
+
+Total real findings after patches: **~3,000-3,500 across 18 rules**. All
+genuine audit signal — no false positives from formula gaps.
+
+### Iteration story — R02 (locked-in lessons)
+
+R02 went through 5 versions before landing:
+- v1 → 20,435 findings (discount-blind)
+- v2-v4 → silently errored on wrong column names
+- v5 → 552 findings, ReSA-canonical formula `head = items - disc`
+
+Key conventions established:
+- **Always search project schema docs before writing rule logic** — three column-name slips on R02 all stemmed from writing from ReSA-canonical memory instead of verifying
+- **`xxhash64(TRAN_SEQ_NO, RULE_ID)` as PK** — deterministic + idempotent + cleanup-friendly
+- **Pre-run `DELETE WHERE RULE_ID = '...'`** — every rule notebook has this cell; handles rule-logic upgrades cleanly
+- **Tax tables are informational, not arithmetic** — `sa_tran_igtax` / `sa_tran_tax` break out tax components OF `head.VALUE`, not separate variables
+
+Full narrative in `docs/audit-layer.md` § "R02 — case study in iteration".
 
 ---
 
-## Gold layer (NOT STARTED)
+## What's next
 
-Aggregates and analytic models on top of silver. Planned topics:
-- Sales by store-day (with weather / holiday joins)
-- Channel comparison (POS vs MKT vs OLIST)
-- Customer lifetime value (LTV)
-- Promotion effectiveness
-- Stock-out / inventory analytics (if RMS dimension data is loaded)
+Module 4 is closed. Two choices ahead — your pick:
+
+### Option A — Module 6 (Gold + Power BI)
+
+| Task | Notes |
+|---|---|
+| `gold/dim_store.py`, `dim_seller.py`, `dim_item.py`, `dim_date.py` | Conformed dimensions from silver |
+| `gold/fact_sales.py`, `fact_returns.py`, `fact_tender.py`, `fact_audit_findings.py` | Star-schema facts joining head + item + disc + tender + sa_error |
+| `infra/synapse_serverless/views/*.sql` | External SQL views over gold Delta (Terraform-managed) |
+| `serving/powerbi/*.pbix` | Sales overview · audit findings dashboard · channel comparison · OMS payment drift |
+| **Pro** | Tangible visual artifact for the portfolio. `sa_error` consumed directly in dashboards. |
+| **Con** | Power BI work is less "data engineering" and more BI. |
+
+### Option B — Module 5 (LLM Intelligence)
+
+| Task | Notes |
+|---|---|
+| `silver/llm/review_enrichment.py` | Olist customer reviews → sentiment + topic extraction |
+| `gold/narrative/weekly_narrative.py` | LLM-generated weekly business summary from sa_error + facts |
+| `apps/text_to_sql/app.py` | Streamlit text-to-SQL UI over silver/gold |
+| `silver/llm/sa_error_classification.py` | LLM classifies sa_error findings into categories (legit / investigate / dismiss) |
+| **Pro** | Differentiating — most retail-data portfolios stop at gold. LLM layer over audit findings is a strong signal. |
+| **Con** | Harder to demonstrate without a visual layer to anchor it. |
+
+### Recommendation
+
+**Module 6 first**, then Module 5. Module 6 gives you tangible visual artifacts
+that reference Module 4's findings concretely (dashboards consuming `sa_error`).
+Module 5 then has somewhere to land (text-to-SQL over the published gold layer,
+narratives that reference the dashboards).
 
 ---
 
-## Second portfolio project (PARALLEL, SEPARATE REPO)
+## Deferred items / open TODOs
 
-Microsoft Fabric supply chain intelligence — leverages the DP-700 cert.
-Built on Data Factory, Dataflow Gen2, PySpark notebooks, pipeline observability.
-Not part of this repo.
+| Item | Module | Notes |
+|---|---|---|
+| `sa_error_impact` table | 4 | Optional ReSA-fidelity feature — joins sa_error to dollar amounts. Defer until needed for dashboards. |
+| Tighten R14 (3σ outliers) | 4 | Currently 2,186 findings. May want TRAN_TYPE scope or minimum value floor. |
+| Re-run R06/R10/R15/R17 with patches | 4 | If not yet re-run; numbers in audit-layer.md show pre-patch state. |
+| Documentation: `docs/folder_structure.md` update | meta | Add `transformations/silver/audit/` tree |
+| Documentation: `docs/conventions.md` update | meta | Add audit-rule patterns (PK hashing, pre-run cleanup, narrow → emit_findings) |
+| `docs/architecture.md` Lucid link | meta | Diagram exists, needs polish + embed in docs |
 
 ---
 
-## SQL analytics showcase (PARALLEL)
+## Cross-machine workflow reminder
 
-15–20 queries of increasing complexity on top of the silver / gold layers.
-Demonstrates SQL chops independent of the PySpark / Databricks engineering.
-Probably lives in a `sql/` folder at the repo root once silver is feature-complete.
+- End of session: `git add . && git commit -m "..." && git push`
+- Start of session: `git pull`
+- Bootstrap reading (always): `CLAUDE.md` → `docs/context_for_claude.md` → `docs/progress.md` (this file)
+- For Module 4 work: also `docs/audit-layer.md`
+- For Module 6 / 5: load `docs/silver-layer.md` and `docs/conventions.md`

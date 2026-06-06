@@ -1,270 +1,239 @@
 # Conventions
 
-Patterns and contracts that every silver notebook follows. Drift here causes
-silent bugs across the layer — read this before writing a new notebook
-(Pass-2 marketplace, Pass-3 Olist).
+Code patterns, naming rules, and `_shared/` library APIs across the project.
+This file is additive — each section names the convention, why it exists, and
+where to read the canonical implementation.
 
-## File layout
+---
 
-```
-transformations/silver/
-├── _shared/                              # %run'd from each notebook
-│   ├── surrogate_keys.py
-│   ├── fx_helpers.py
-│   ├── quarantine.py
-│   └── schema_gate.py
-├── 0N_sa_<table_name>/                   # folder per silver table
-│   ├── sa_<table_name>_pos.py            # source: bronze.pos_rtlog
-│   ├── sa_<table_name>_marketplace.py    # source: marketplace (Pass-2)
-│   └── sa_<table_name>_olist.py          # source: Olist (Pass-3)
-```
+## Silver layer
 
-Rules:
-- **Numeric prefix** on folders preserves the build-order narrative (`01_` → `06_`)
-- **Underscore-prefix** `_shared/` is a valid Python package name (digit-prefix folders aren't)
-- **One notebook per (source × silver table)** — never UNION sources in one notebook
-- **File suffix** identifies the source: `_pos.py`, `_marketplace.py`, `_olist.py`
+### Surrogate keys (xxhash64)
 
-## Cell structure (every silver notebook)
+- `TRAN_SEQ_NO = xxhash64(RTLOG_ORIG_SYS, TRAN_SEQ_NO_NATURAL, TRAN_DATETIME)`
+- `STORE_DAY_SEQ_NO = xxhash64(STORE, BUSINESS_DATE)`
+- `ERROR_SEQ_NO = xxhash64(TRAN_SEQ_NO, RULE_ID)` *(audit layer)*
 
-Eight cells, in this order:
+`TRAN_DATETIME` must be cast to `TimestampType()` **before** hashing. Module 1
+fault injection makes both the natural composite and the source `tran_seq_no`
+non-unique — `tran_datetime` is the tie-breaker. Canonical implementation:
+`_shared/surrogate_keys.py`.
 
-1. **Markdown header** — contract, "patterns introduced here", DQ rules,
-   "NOT a DQ failure"
-2. **Imports & widgets** — `dbutils.widgets.text("source_table", ...)`
-3. **Shared helpers** — `%run ../_shared/<name>` for each helper used
-4. **Configuration** — `TARGET_TABLE`, `QUARANTINE_TABLE`, `PARENT_TABLE`, `CHECKPOINT_PATH`
-5. **Target schema** — `StructType([...])`, plus `quarantine_schema` derived from it
-6. **Bootstrap** — create empty Delta target if not exists (partitioned by `BUSINESS_DATE`)
-7. **`merge_microbatch` handler** — the heart (8 steps internally)
-8. **Run the stream** — `readStream + foreachBatch + availableNow.start().awaitTermination()`
-9. **Validation + diagnostics** — row count, quarantine summary, PK, FK,
-   distributions, FX sanity
+### FX inheritance
 
-(That's actually 9, but cells 8 and 9 are tight enough that they read as
-the run + the audit. The pattern is the same in all six notebooks.)
+Children call `enrich_with_parent_fx(keyed, PARENT_TABLE, [join_keys])`. Inherits
+`CURRENCY_CODE` + `FX_RATE` from the parent silver table. `sa_tran_head` is the
+root and derives FX from `bronze.fx_rates` directly. Never re-derive FX in
+children. Canonical: `_shared/fx_helpers.py`.
 
-## The `merge_microbatch` handler — 7 steps
+### Quarantine pattern
+
+DQ failures route to `retaildp.quarantine.silver_<table>_rejects` with
+`rejection_reason ArrayType<String>`. Helper `merge_and_quarantine()` handles
+both the MERGE and the quarantine append idempotently. Canonical:
+`_shared/quarantine.py`.
+
+### Schema gate
+
+Notebooks that explode optional bronze arrays (`tran_tax`, `tran_igtax`) check
+`bronze_array_has_inner_fields(...)` before starting the stream. Lesson from
+debugging IND-only Pass-1 data (Auto Loader infers empty arrays as no-field
+structs). Canonical: `_shared/schema_gate.py`.
+
+### Partitioning
+
+Every silver Delta table partitioned by `BUSINESS_DATE`. No `DAY` column
+anywhere. `TRAN_SEQ_NO` is the unique surrogate that replaces the
+`(STORE, DAY, TRAN_SEQ_NO)` ReSA composite.
+
+### Channel discriminator
+
+Every silver row carries `RTLOG_ORIG_SYS` ∈ `{POS, MKT, OMS}`. Same silver
+table holds all three channels. Surrogate key starts with `RTLOG_ORIG_SYS` so
+cross-channel collisions are structurally impossible.
+
+### Helper loading
+
+`%run ../_shared/<name>` — relative `%run`, not `import`. Avoids `sys.path`
+setup, works with digit-prefixed folder names. The `%run` cascade also means
+transitive imports work: if `rule_framework` `%run`s `sa_error_schema`, then
+a rule that `%run`s only `rule_framework` still sees `sa_error_schema`'s
+top-level variables.
+
+### Streaming pattern (POS / MKT)
+
+`readStream + availableNow + foreachBatch` for streaming sources; **batch** for
+static dims (Olist, FX, weather, stores). Inside `foreachBatch`:
+
+1. Aggregate / flatten the microbatch
+2. Conformance — rename, derive keys, lineage
+3. FK validation via broadcast joins (small dims)
+4. MERGE clean rows into target; append rejects to quarantine
+
+### Idempotent MERGE on PK
+
+All silver and audit writes use MERGE on the surrogate PK. Re-running on the
+same source data produces the same PKs → MERGE updates existing rows, no
+duplicates.
+
+---
+
+## Audit layer (Module 4)
+
+### Rule notebook template
+
+Every rule under `transformations/silver/audit/rules/` follows this shape:
 
 ```python
-def merge_microbatch(microBatchDF, batch_id):
-    # 1 + 2. Explode (if array) + flatten with explicit aliases
-    flat = (
-        microBatchDF
-        .withColumn("<elem>", explode(col("<array>")))    # only for children that explode
-        .select(... explicit aliases for every column ...)
-        .filter(... not-null checks on surrogate components ...)
-    )
+# Databricks notebook source
+# MAGIC %md
+# MAGIC # Audit Rule R0X — <one-line summary>
+# MAGIC [property table, expected outcomes, etc.]
 
-    # 3. Surrogate key — shared helper
-    keyed = flat.withColumn("TRAN_SEQ_NO", tran_seq_no_expr())
+from pyspark.sql.functions import col, lit, concat, ...
+from pyspark.sql.types import DecimalType, StringType
 
-    # 4. FK enrich — shared helper (skipped only for 01)
-    enriched = enrich_with_parent_fx(keyed, PARENT_TABLE, [<join_keys>])
+# MAGIC %run ../_shared/rule_framework
 
-    # 5. Derive — USD companions + lineage
-    derived = (
-        enriched
-        .withColumn("<AMOUNT>_USD", (col("<AMOUNT>") * col("FX_RATE")).cast(DecimalType(20, 4)))
-        ...
-        .withColumn("_silver_ts", current_timestamp())
-        .withColumn("_source",    lit(SOURCE_TABLE))
-    )
+RULE_ID   = "R0X_<NAME>"
+RULE_NAME = "<human-readable rule description>"
+SEVERITY  = Severity.<FATAL|MINOR|WARNING>
 
-    # 6. DQ split — rejection_reason array
-    dq = derived.withColumn(
-        "rejection_reason",
-        array_compact(array(
-            when(<condition>, lit("<reason string>")),
-            ...
-        ))
-    )
+# Pre-run cleanup — handles rule-logic upgrades
+if spark.catalog.tableExists(TARGET_TABLE):
+    spark.sql(f"DELETE FROM {TARGET_TABLE} WHERE RULE_ID = '{RULE_ID}'")
 
-    clean   = dq.filter("size(rejection_reason) = 0").drop("rejection_reason", "_has_parent")
-    rejects = dq.filter("size(rejection_reason) > 0").drop("_has_parent")
-    # _quarantine_ts added INSIDE merge_and_quarantine — do NOT add here
+def run(spark) -> DataFrame:
+    # 1. Read inputs
+    # 2. Compute drift / violations
+    # 3. Project to narrow_finding_schema (8 cols)
+    return emit_findings(narrow, RULE_ID, RULE_NAME, SEVERITY)
 
-    clean = clean.select(*[f.name for f in <schema>.fields])
+# Standalone execution
+findings = run(spark)
+write_findings(findings)
 
-    # 7. MERGE + quarantine — shared helper
-    clean_n, reject_n = merge_and_quarantine(
-        clean_df=clean,
-        rejects_df=rejects,
-        target_table=TARGET_TABLE,
-        quarantine_table=QUARANTINE_TABLE,
-        merge_keys=[<PK>],
-    )
-
-    print(f"Batch {batch_id}: clean={clean_n} rejects={reject_n}")
+# Validation — print counts, samples, by-channel breakdown
 ```
 
-## Shared helper API contracts
+### Narrow finding contract
 
-### `surrogate_keys.tran_seq_no_expr()`
-
-Returns a Column expression. Caller must have already flattened these three columns:
+Each rule's `run()` returns a DataFrame with exactly these 8 columns:
 
 | Column | Type | Notes |
 |---|---|---|
-| `RTLOG_ORIG_SYS` | string | `'POS'` / `'MKT'` / `'OLIST'` |
-| `TRAN_SEQ_NO_NATURAL` | string | POS-assigned natural composite |
-| `TRAN_DATETIME` | timestamp | **must already be cast** to `TimestampType()` |
+| `TRAN_SEQ_NO` | LongType | FK → sa_tran_head (or a pseudo-key for non-tran-level rules like R01) |
+| `STORE` | LongType | |
+| `BUSINESS_DATE` | DateType | |
+| `RTLOG_ORIG_SYS` | StringType | POS / MKT / OMS |
+| `MEASURED_VALUE` | DecimalType(20,4) | what the rule observed (nullable) |
+| `EXPECTED_VALUE` | DecimalType(20,4) | what the rule expected (nullable) |
+| `DELTA` | DecimalType(20,4) | difference (nullable) |
+| `ERROR_DESC` | StringType | human-readable with all relevant numbers |
 
-The cast on `TRAN_DATETIME` is part of the formula. Never hash the raw string.
+`emit_findings()` adds the rest — ERROR_SEQ_NO (hashed), RULE_ID/RULE_NAME/SEVERITY
+(literals), `_audit_ts` (current_timestamp), `_audit_run_id` (NULL — set by writer).
 
-### `fx_helpers.enrich_with_parent_fx(df, parent_table, join_keys)`
+### Severity convention (ReSA)
 
-Broadcast-joins parent silver table, inherits `CURRENCY_CODE` + `FX_RATE`,
-adds boolean `_has_parent` column.
+- `W` = Warning (informational, auditor reviews)
+- `M` = Minor (needs auditor action)
+- `F` = Fatal (blocks downstream processing)
 
-| Arg | Example |
-|---|---|
-| `df` | DataFrame with surrogate + join keys populated |
-| `parent_table` | `"retaildp.silver.sa_tran_head"` or `"retaildp.silver.sa_tran_item"` |
-| `join_keys` | `["TRAN_SEQ_NO"]` (tran-level) or `["TRAN_SEQ_NO", "ITEM_SEQ_NO"]` (line-level) |
+Canonical: `Severity` class in `rule_framework.py`.
 
-Returns: enriched DataFrame. Caller is responsible for dropping `_has_parent`
-after using it in the DQ rules.
+### Tax tables are informational, NOT arithmetic
 
-### `quarantine.merge_and_quarantine(clean_df, rejects_df, target_table, quarantine_table, merge_keys)`
+`sa_tran_igtax` / `sa_tran_tax` break out tax components OF `head.VALUE`. They
+are NOT separate variables to add or subtract in any reconciliation. Locked
+ReSA convention discovered through R02's 5-iteration cycle.
 
-Final write phase. MERGE clean rows on composite PK; append rejects to quarantine
-(creates on first write). Adds `_quarantine_ts` to rejects internally.
+### Schema verification discipline
 
-Returns `(clean_n, reject_n)` for the per-batch print.
+Before writing any rule that reads silver tables, **search project knowledge
+for the actual column names**. Don't write from ReSA-canonical memory. R02
+went through three column-name slips (`IGTAX_AMT` → `TOTAL_IGTAX_AMT`,
+`DISC_VALUE` → `UNIT_DISCOUNT_AMT`, etc.) all caused by skipping this step.
 
-### `schema_gate.bronze_array_has_inner_fields(source_table, array_column)`
+### Orchestrator pattern
 
-Returns `True` iff the column is `ARRAY<STRUCT<...>>` with at least one inner field.
-Use BEFORE starting the stream, not inside `foreachBatch` — Spark must be able to
-plan the explode + projection, and if the inner struct is empty, planning fails.
+`sa_error_writer.py` uses `dbutils.notebook.run()` over `%run` for:
+- Iterable list of rule paths (loop, not 18 cells)
+- Per-rule timing capture
+- Exception isolation (one failed rule doesn't sink the batch)
 
-## Naming conventions
+After all rules complete, the orchestrator runs a single SQL `UPDATE` to set
+`_audit_run_id = BATCH_RUN_ID` for all rows where `_audit_ts >= start_time`.
+This shares one batch ID without modifying any rule file.
 
-### Tables
-- Silver targets: `retaildp.silver.sa_<entity>` (matches ReSA names)
-- Quarantine: `retaildp.quarantine.silver_<entity>_rejects`
-- Bronze sources: `retaildp.bronze.<source>` (e.g. `pos_rtlog`, `fx_rates`)
+---
 
-### Columns
-- **PK / FK columns**: UPPER_SNAKE_CASE matching ReSA (`TRAN_SEQ_NO`, `ITEM_SEQ_NO`)
-- **Lakehouse additions**: also UPPER_SNAKE_CASE (`VALUE_USD`, `TAX_MODE`)
-- **Lineage**: `_`-prefixed lowercase (`_silver_ts`, `_source`, `_quarantine_ts`)
-- **Temporary join helpers**: `_p_<NAME>` prefix (dropped before final output)
+## Naming
 
-### Files
-- Silver notebooks: `sa_<table_name>_<source>.py`
-- Shared helpers: `<concept>.py` in `_shared/`
+| Object | Pattern | Example |
+|---|---|---|
+| Catalog | always `retaildp` | |
+| Schema | `bronze`, `silver`, `quarantine` | |
+| Bronze table | `bronze.<source>` | `bronze.pos_rtlog` |
+| Silver table | `silver.sa_<entity>` (ReSA-canonical) | `silver.sa_tran_head` |
+| Quarantine table | `quarantine.silver_<table>_<src>_rejects` | `quarantine.silver_sa_tran_head_pos_rejects` |
+| Audit findings | `silver.sa_error` | |
+| Notebook | `<NN>_<entity>_<source>.py` | `01_sa_tran_head_pos.py` |
+| Audit rule notebook | `<NN>_<short_name>.py` | `02_head_items_total.py` |
+| Rule ID | `R<NN>_<SHOUTING_SNAKE_CASE>` | `R02_HEAD_ITEMS_TOTAL` |
 
-## DQ rules — quarantine, don't drop
+---
 
-Every silver notebook routes failures to `retaildp.quarantine.silver_<table>_rejects`.
-The `rejection_reason` column is `ArrayType<StringType>` — a row can have multiple
-reasons stacked.
+## Cross-cutting
 
-### Standard rejection reasons by table
+### Decimal precision
 
-| Table | Reasons |
-|---|---|
-| `sa_tran_head` | `TRAN_DATETIME invalid or null`, `TRAN_TYPE not in valid set`, `VALUE must be NOT NULL`, `STORE_DAY_SEQ_NO FK lookup failed`, `CURRENCY_CODE FK lookup failed`, `TAX_MODE could not be derived` |
-| `sa_tran_item` | `orphan_no_parent_header`, `ITEM_SEQ_NO null — cannot form PK`, `ITEM_TYPE null — mandatory in ReSA` |
-| `sa_tran_disc` | `orphan_no_parent_item`, `ITEM_SEQ_NO null — cannot form FK`, `DISCOUNT_SEQ_NO null — cannot form PK`, `RMS_PROMO_TYPE null — cannot form PK` |
-| `sa_tran_tender` | `orphan_no_parent_header`, `TENDER_SEQ_NO null`, `TENDER_TYPE_GROUP null`, `TENDER_AMT null — mandatory in ReSA` |
-| `sa_tran_tax` | `orphan_no_parent_header`, `TAX_SEQ_NO null`, `TAX_CODE null`, `TAX_AMT null` |
-| `sa_tran_igtax` | `orphan_no_parent_item`, `ITEM_SEQ_NO null`, `IGTAX_SEQ_NO null`, `TOTAL_IGTAX_AMT null` |
+All monetary columns use `DecimalType(20, 4)`. Never `FloatType` or `DoubleType`
+on financial data. Precision artefacts at this scale are bounded and avoided.
 
-### What's NEVER a DQ failure
-- `ERROR_IND = 'Y'` — fault-injected rows pass through; Module 4 audit catches them
-- `FX_RATE` null — `*_USD` columns become null but row still lands
-- Empty arrays in bronze (e.g. `tran_disc = []`) — produce 0 rows via `explode`, that's correct
-- `ORIG_CURRENCY != CURRENCY_CODE` on tenders — legitimate foreign tender
+### Logical operators in WHERE
 
-## Idempotency requirements
-
-Every silver notebook MUST be re-runnable without data drift. Three guarantees:
-
-1. **Deterministic surrogate keys** — `TRAN_SEQ_NO = xxhash64(...)` is a pure
-   function of inputs. Same bronze row always hashes to the same surrogate.
-2. **MERGE on PK** — `whenMatchedUpdateAll` + `whenNotMatchedInsertAll`.
-   Re-running over already-processed bronze does nothing destructive
-   (just refreshes `_silver_ts`).
-3. **Streaming checkpoint per notebook** — Spark tracks consumed bronze commits.
-   A failed run resumes from the last checkpoint; checkpoints are per
-   `(silver table × source channel)` pair to allow independent backfills.
-
-**Test for idempotency**: re-run a silver notebook against the same bronze.
-Row count must not change.
-
-## Partitioning convention
-
-Every silver table partitioned by `BUSINESS_DATE` (DateType). No `DAY` column
-(redundant with BUSINESS_DATE; ReSA had it for Oracle's physical layout). The
-surrogate `TRAN_SEQ_NO` is globally unique so we don't need the (STORE, DAY,
-TRAN_SEQ_NO) composite that ReSA uses.
-
-Bootstrap pattern:
+Use bitwise `&` / `|` for combining column conditions:
 
 ```python
-(
-    spark.createDataFrame([], <schema>).write
-    .format("delta")
-    .partitionBy("BUSINESS_DATE")
-    .option("delta.autoOptimize.optimizeWrite", "true")
-    .option("delta.autoOptimize.autoCompact",   "true")
-    .saveAsTable(TARGET_TABLE)
-)
+.where((col("X") > 0) & (col("Y").isNotNull()))
 ```
 
-## Checkpoints
+Not Python `and` / `or` — those evaluate Columns to booleans incorrectly.
 
-```
-abfss://checkpoints@stretaildpsatyaki01.dfs.core.windows.net/silver/<table>/
-```
+### `lit()` for cross-type arithmetic
 
-For Pass-2 onwards, sub-path by source channel:
+For DecimalType subtraction etc., use explicit `lit(0).cast(DecimalType(20, 4))`
+to avoid Python-int conversion drift.
 
-```
-silver/sa_tran_head/             # Pass-1 POS (legacy, kept at this path)
-silver/sa_tran_head/marketplace/ # Pass-2
-silver/sa_tran_head/olist/       # Pass-3
-```
+### Never TRUNCATE a Delta source with a streaming reader
 
-Each source has its own checkpoint state. Independent backfills don't
-collide.
+TRUNCATE writes a delete commit that breaks downstream streams
+(`DELTA_SOURCE_IGNORE_DELETE`). Use DROP + recreate instead. Documented as
+operational lesson during Module 3 Bronze.
 
-## Validation cells — what every notebook checks
+---
 
-| Check | Purpose |
-|---|---|
-| Row count | Smoke test |
-| Quarantine summary + top reasons | What's failing and why |
-| PK uniqueness (`groupBy(PK).count().where("count > 1")` = 0) | Surrogate / composite is truly unique |
-| FK integrity (`left_anti` against parent = 0) | Every child has a live parent |
-| Domain distributions | TRAN_TYPE, RMS_PROMO_TYPE, TAX_MODE, etc. |
-| Fan-out distribution | Items/tran, discounts/tran, etc. |
-| Channel distribution | All POS in Pass-1; MKT or OLIST appears post-Pass-2 |
-| FX sanity sample | First 10 rows: amount, currency, rate, USD |
+## `_shared/` library API summary
 
-Notebook 06 also runs a **cross-table reconciliation**:
-`SUM(sa_tran_igtax.TOTAL_IGTAX_AMT) per item == sa_tran_item.TOTAL_IGTAX_AMT` ± 0.01.
+| Helper | File | Used by |
+|---|---|---|
+| `tran_seq_no_expr()` | `surrogate_keys.py` | every silver tran_* notebook |
+| `enrich_with_parent_fx(df, parent, keys)` | `fx_helpers.py` | every child silver table |
+| `merge_and_quarantine(...)` | `quarantine.py` | every silver writer |
+| `bronze_array_has_inner_fields(...)` | `schema_gate.py` | tran_tax, tran_igtax |
+| `Severity.{WARNING, MINOR, FATAL}` | `audit/_shared/rule_framework.py` | every audit rule |
+| `emit_findings(narrow, rule_id, name, sev)` | `audit/_shared/rule_framework.py` | every audit rule |
+| `write_findings(df, target, run_id=None)` | `audit/_shared/rule_framework.py` | every audit rule + orchestrator |
 
-## When to bend the rules
+---
 
-The `_shared/` helpers cover ~95% of patterns. The 5% that stays inline:
+## When picking up work in a new session
 
-- **Source-specific flatten** — `01.pos.py` and `01.marketplace.py` will
-  have totally different `.select(...)` projections. That's the conformance
-  point; it must stay per-source.
-- **Source-specific DQ rules** — POS validates `TRAN_TYPE`; marketplace
-  might validate `ORDER_STATUS`. Different rules per source.
-- **Dimension lookups** — `01.pos.py` joins to `sa_store_data` and
-  `sa_store_day` for store-level enrichment. That's not the parent-FX
-  pattern; it's a different shape and lives inline in 01.
-- **First-time FX derivation** — `01` derives `FX_RATE` from
-  `bronze.fx_rates` directly. Children inherit. Only 01 does the lookup.
-
-When in doubt: **the helpers exist to prevent silent drift.** If you find
-yourself copying ~10 lines of "broadcast join + inherit + drop" between
-two notebooks, that's a sign to use `enrich_with_parent_fx`. If you find
-yourself writing per-source flatten logic, that stays inline — that IS
-the conformance work.
+1. Read `CLAUDE.md`, `docs/context_for_claude.md`, `docs/progress.md`
+2. Identify which module's folder you're working in
+3. For schema-dependent work: search project knowledge for the target table's schema **before** writing code
+4. For silver work: check this file's `_shared/` library API summary above
+5. For audit work: check `docs/audit-layer.md` for rule patterns and the framework
+6. Verify Decimal precision, channel discriminator, FX inheritance haven't drifted from above
+7. Commit at session boundaries: `git add . && git commit && git push`
