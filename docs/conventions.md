@@ -5,6 +5,8 @@ This file is additive — each section names the convention, why it exists, and
 where to read the canonical implementation.
 
 ---
+Olist's silver discriminator is RTLOG_ORIG_SYS='OMS', not OLIST. Any gold join to the Olist channel keys on OMS
+
 
 ## Silver layer
 
@@ -237,3 +239,8 @@ operational lesson during Module 3 Bronze.
 5. For audit work: check `docs/audit-layer.md` for rule patterns and the framework
 6. Verify Decimal precision, channel discriminator, FX inheritance haven't drifted from above
 7. Commit at session boundaries: `git add . && git commit && git push`
+
+Bronze→Silver in this lakehouse projects a narrow ReSA subset, not the full spec. Always run DESCRIBE TABLE against the actual silver table before writing transformations against it
+
+
+
